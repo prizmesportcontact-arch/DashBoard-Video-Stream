@@ -1421,7 +1421,7 @@ function renderPublish() {
       <fieldset class="choices"><legend>Publier sur</legend>${accounts
         .map((a) => {
           const ok = canPublish(a);
-          return `<label class="choice p-${esc(a.platform)} ${ok ? "" : "is-off"}"><input type="checkbox" name="targets" value="${esc(a.id)}" ${ok ? "" : "disabled"} ${ok && (state.pubChecked || []).includes(a.id) ? "checked" : ""}><span>${accountBadge(a)}${esc(a.name)} <span class="muted small">${esc(PLATFORMS[a.platform])}</span></span></label>`;
+          return `<label class="choice p-${esc(a.platform)} ${ok ? "" : "is-off"}"><input type="checkbox" name="targets" value="${esc(a.id)}" ${ok ? "" : "disabled"} ${ok && (state.pubChecked || []).includes(a.id) ? "checked" : ""}><span>${accountBadge(a)}${esc(a.name)} <em class="choice-plat">${esc(PLATFORMS[a.platform])}</em></span></label>`;
         })
         .join("")}</fieldset>
       <ul class="pub-notes muted small">
