@@ -159,21 +159,9 @@ export async function saveMetric(row) {
   return data;
 }
 
-/* ---------- Fichiers vidéo en ligne (exports du monteur) ---------- */
+/* ---------- Fichiers vidéo en ligne ---------- */
 
 const BUCKET = "media";
-
-export async function uploadMedia(videoId, blob, previousPath) {
-  if (!isCloud) throw new Error("indisponible en mode démo");
-  const { data } = await client.auth.getSession();
-  const userId = data.session?.user?.id;
-  if (!userId) throw new Error("session expirée, reconnecte-toi");
-  const path = `${userId}/${videoId}/${Date.now()}.mp4`;
-  const { error } = await client.storage.from(BUCKET).upload(path, blob, { contentType: "video/mp4", upsert: false });
-  fail(error);
-  if (previousPath) await client.storage.from(BUCKET).remove([previousPath]);
-  return path;
-}
 
 export async function mediaUrl(path) {
   const { data, error } = await client.storage.from(BUCKET).createSignedUrl(path, 3600);

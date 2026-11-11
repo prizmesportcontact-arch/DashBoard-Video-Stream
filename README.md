@@ -16,7 +16,3 @@ Un seul site pour suivre mes vidéos et mes streams (TikTok, Instagram, Twitch) 
 
 Aucune clé secrète ne doit se trouver dans ce dépôt : il est public.
 
-## Monteur
-
-Le monteur (Montage, Monteur) découpe, recadre et exporte en MP4 dans le navigateur. Il utilise la bibliothèque
-[Mediabunny](https://mediabunny.dev) (licence MPL-2.0), copiée telle quelle dans `js/vendor/`.
