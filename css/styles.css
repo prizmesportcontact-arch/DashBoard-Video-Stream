@@ -212,7 +212,9 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
 .pill time { color: var(--ink-2); margin-right: 5px; font-variant-numeric: tabular-nums; }
 
 .figures { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.figure { padding: 12px; border-radius: var(--r-s); border: 1px solid var(--line); background: var(--black); }
+.figure { padding: 12px; border-radius: var(--r-s); border: 1px solid var(--line); border-top: 2px solid var(--p, var(--line)); background: var(--black); }
+.figure-platform { margin-top: 4px; font-size: 0.75rem; font-weight: 600; color: var(--p, var(--ink-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.figure-platform span { font-weight: 400; color: var(--ink-3); }
 .figure-name { display: flex; align-items: center; gap: 7px; font-weight: 500; color: var(--ink-2); }
 .figure-value { font-family: var(--font-display); font-size: 1.5rem; font-weight: 600; line-height: 1.2; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .figure-sub { font-size: 0.82rem; color: var(--ink-2); }
@@ -409,7 +411,7 @@ button.timecode:hover { background: var(--hover); }
 .accounts-grid > .panel { grid-column: span 6; }
 
 /* Connexion des comptes */
-img.acc { object-fit: cover; background: var(--glass-2); }
+img.acc { object-fit: cover; background: var(--glass-2); box-shadow: 0 0 0 2px var(--p); }
 .tag.ok { background: rgba(62, 207, 110, 0.14); color: var(--done); }
 .live-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 0.8rem; font-weight: 600; color: var(--late); }
 .live-badge i { width: 8px; height: 8px; border-radius: 50%; background: var(--late); animation: live 1.6s ease-in-out infinite; }
@@ -461,6 +463,9 @@ img.acc { object-fit: cover; background: var(--glass-2); }
   .chip-label { display: none; }
   .figure { display: grid; grid-template-columns: 1fr auto; align-items: center; }
   .figure-value { margin: 0; font-size: 1.5rem; }
+  .figure-name { grid-column: 1; grid-row: 1; min-width: 0; }
+  .figure-platform { grid-column: 1; grid-row: 2; }
+  .figure-value { grid-column: 2; grid-row: 1 / span 2; }
   .figure-sub { grid-column: 1 / -1; }
   .table thead { display: none; }
   .table, .table tbody, .table tr, .table td { display: block; }

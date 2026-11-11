@@ -211,3 +211,6 @@ create unique index if not exists accounts_external_key on public.accounts (user
 
 -- Connexion TikTok : jeton de renouvellement (protégé par les règles RLS du compte).
 alter table public.accounts add column if not exists refresh_token text;
+
+-- Nombre de vidéos / publications sur la plateforme (mis à jour automatiquement).
+alter table public.accounts add column if not exists content_count integer;

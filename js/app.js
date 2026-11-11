@@ -162,6 +162,12 @@ const initials = (name) =>
     .slice(0, 2)
     .map((w) => w[0].toUpperCase())
     .join("") || "?";
+const CONTENT_WORD = { youtube: "vidéo", tiktok: "vidéo", instagram: "publication" };
+const contentCount = (a) => {
+  const word = CONTENT_WORD[a.platform];
+  if (!word || a.content_count == null) return "";
+  return `<span>${fmt.num.format(a.content_count)} ${word}${a.content_count > 1 ? "s" : ""}</span>`;
+};
 const accountBadge = (a) => {
   const avatar = safeUrl(a.avatar_url);
   const title = `${esc(a.name)}, ${esc(PLATFORMS[a.platform])}`;
@@ -377,6 +383,7 @@ const homeBlocks = {
           : "Aucun relevé";
         return `<div class="figure p-${esc(a.platform)}">
           <div class="figure-name">${accountBadge(a)}<span class="figure-label">${esc(a.name)}</span></div>
+          <div class="figure-platform">${esc(PLATFORMS[a.platform])}${a.handle ? ` <span>${esc(a.handle)}</span>` : ""}</div>
           <div class="figure-value">${f ? fmt.num.format(f.latest.followers) : "–"}</div>
           <div class="figure-sub">${f ? "abonnés. " : ""}${sub}</div>
           ${state.live[a.id] ? `<div class="live-badge"><i></i>En live, ${fmt.num.format(state.live[a.id].viewers)} viewers</div>` : ""}
@@ -1165,6 +1172,7 @@ async function syncConnected({ quiet = true } = {}) {
         const patch = { synced_at: new Date().toISOString() };
         if (account.external_id !== channel.id) patch.external_id = channel.id;
         if (channel.avatar && account.avatar_url !== channel.avatar) patch.avatar_url = channel.avatar;
+        if (channel.videos != null) patch.content_count = Number(channel.videos);
         Object.assign(account, await store.update("accounts", account.id, patch));
         changed = true;
       } catch (err) {
@@ -1193,6 +1201,7 @@ async function syncConnected({ quiet = true } = {}) {
         patch.synced_at = new Date().toISOString();
         if (account.external_id !== profile.id) patch.external_id = profile.id;
         if (profile.avatar && account.avatar_url !== profile.avatar) patch.avatar_url = profile.avatar;
+        if (profile.posts != null) patch.content_count = Number(profile.posts);
         Object.assign(account, await store.update("accounts", account.id, patch));
         changed = true;
       } catch (err) {
@@ -1215,6 +1224,7 @@ async function syncConnected({ quiet = true } = {}) {
         };
         if (res.profile.id && account.external_id !== res.profile.id) patch.external_id = res.profile.id;
         if (res.profile.avatar) patch.avatar_url = res.profile.avatar;
+        if (res.profile.videos != null) patch.content_count = Number(res.profile.videos);
         Object.assign(account, await store.update("accounts", account.id, patch));
         changed = true;
       } catch (err) {
@@ -1278,6 +1288,7 @@ async function finishTikTokConnect(code) {
       platform: "tiktok",
       external_id: p.id,
       avatar_url: p.avatar,
+      content_count: p.videos ?? null,
       access_token: res.access_token,
       refresh_token: res.refresh_token,
       token_expires_at: res.refresh_expires_at,
@@ -1326,7 +1337,7 @@ function renderAccounts() {
                   return `<li class="row">${accountBadge(a)}
                   <button type="button" class="row-main" data-action="edit-account" data-id="${esc(a.id)}">
                     <span class="row-title">${esc(a.name)}</span>
-                    <span class="row-sub">${a.handle ? `<span>${esc(a.handle)}</span>` : ""}<span>${n} contenu${n > 1 ? "s" : ""}</span>${connectionTag(a)}</span>
+                    <span class="row-sub">${a.handle ? `<span>${esc(a.handle)}</span>` : ""}${contentCount(a)}${n ? `<span>${n} dans Régie</span>` : ""}${connectionTag(a)}</span>
                   </button></li>`;
                 })
                 .join("")}</ul>`
