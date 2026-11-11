@@ -2,6 +2,7 @@ import { APP_NAME } from "./config.js";
 import * as store from "./store.js";
 import * as twitch from "./twitch.js";
 import * as youtube from "./youtube.js";
+import * as instagram from "./instagram.js";
 
 /* ---------- Références ---------- */
 
@@ -378,7 +379,13 @@ const homeBlocks = {
           <div class="figure-value">${f ? fmt.num.format(f.latest.followers) : "–"}</div>
           <div class="figure-sub">${f ? "abonnés. " : ""}${sub}</div>
           ${state.live[a.id] ? `<div class="live-badge"><i></i>En live, ${fmt.num.format(state.live[a.id].viewers)} viewers</div>` : ""}
-          ${state.reconnect[a.id] ? `<button type="button" class="btn small" data-action="twitch-connect">Reconnecter Twitch</button>` : ""}
+          ${
+            state.reconnect[a.id]
+              ? a.platform === "twitch"
+                ? `<button type="button" class="btn small" data-action="twitch-connect">Reconnecter Twitch</button>`
+                : `<button type="button" class="btn small" data-action="edit-account" data-id="${esc(a.id)}">Recoller la clé ${esc(PLATFORMS[a.platform])}</button>`
+              : ""
+          }
         </div>`;
       })
       .join("");
@@ -1123,7 +1130,8 @@ async function syncConnected({ quiet = true } = {}) {
   if (state.syncing) return;
   const twitchList = twitch.enabled ? state.db.accounts.filter((a) => a.platform === "twitch" && a.access_token && a.external_id) : [];
   const youtubeList = youtube.enabled ? state.db.accounts.filter((a) => a.platform === "youtube" && (a.external_id || a.handle)) : [];
-  if (!twitchList.length && !youtubeList.length) return;
+  const instagramList = state.db.accounts.filter((a) => a.platform === "instagram" && a.access_token);
+  if (!twitchList.length && !youtubeList.length && !instagramList.length) return;
   state.syncing = true;
   let changed = false;
   const report = (label, err) => {
@@ -1162,6 +1170,34 @@ async function syncConnected({ quiet = true } = {}) {
           state.notFound[account.id] = true;
           changed = true;
         } else report("YouTube", err);
+      }
+    }
+    for (const account of instagramList) {
+      try {
+        const patch = {};
+        if (instagram.shouldRefresh(account.token_expires_at)) {
+          try {
+            const fresh = await instagram.refresh(account.access_token);
+            patch.access_token = fresh.token;
+            patch.token_expires_at = fresh.expiresAt;
+          } catch (err) {
+            if (err instanceof instagram.InstagramExpired) throw err;
+            console.warn("Prolongation de la clé Instagram reportée", err);
+          }
+        }
+        const profile = await instagram.fetchProfile(patch.access_token || account.access_token);
+        delete state.reconnect[account.id];
+        if (profile.followers !== null) await saveFollowers(account, profile.followers);
+        patch.synced_at = new Date().toISOString();
+        if (account.external_id !== profile.id) patch.external_id = profile.id;
+        if (profile.avatar && account.avatar_url !== profile.avatar) patch.avatar_url = profile.avatar;
+        Object.assign(account, await store.update("accounts", account.id, patch));
+        changed = true;
+      } catch (err) {
+        if (err instanceof instagram.InstagramExpired) {
+          state.reconnect[account.id] = true;
+          changed = true;
+        } else report("Instagram", err);
       }
     }
   } finally {
@@ -1234,6 +1270,7 @@ function renderAccounts() {
             : `<p class="muted small">Aucun compte ${esc(label)}.</p>`
         }
         ${key === "youtube" && youtube.enabled ? '<p class="muted small">Le @ de chaque chaîne suffit : abonnés et photo se mettent à jour tout seuls.</p>' : ""}
+        ${key === "instagram" ? '<p class="muted small">Ouvre un compte et colle sa clé d\'accès Meta : abonnés et photo se mettent à jour tout seuls.</p>' : ""}
       </section>`;
     })
     .join("");
@@ -1247,18 +1284,39 @@ function accountForm(account, defaults = {}) {
     body: `
       ${field(
         "Plateforme",
-        `<select name="platform">${Object.entries(PLATFORMS)
+        `<select name="platform" data-action="account-platform">${Object.entries(PLATFORMS)
           .map(([key, label]) => `<option value="${key}" ${a.platform === key ? "selected" : ""}>${label}</option>`)
           .join("")}</select>`
       )}
       ${field("Nom affiché", `<input type="text" name="name" value="${esc(a.name)}" maxlength="60" placeholder="Ma chaîne principale" required>`)}
       ${field("Identifiant", `<input type="text" name="handle" value="${esc(a.handle)}" maxlength="80" placeholder="@moncompte">`)}
       ${youtube.enabled ? '<p class="muted small">Pour YouTube, mets le @ exact de la chaîne : les abonnés se mettent alors à jour tout seuls.</p>' : ""}
+      <div data-ig ${a.platform === "instagram" ? "" : "hidden"}>${field(
+        "Clé d'accès Instagram",
+        `<input type="password" name="ig_token" autocomplete="off" spellcheck="false" placeholder="${account?.platform === "instagram" && account.access_token ? "Déjà connecté : colle une nouvelle clé pour la remplacer" : "Colle ici la clé générée chez Meta"}">`
+      )}
+      <p class="muted small">Avec la clé, les abonnés et la photo se mettent à jour tout seuls. Régie la prolonge elle-même tant que tu l'ouvres au moins une fois tous les 60 jours.</p></div>
       ${account?.access_token ? `<p class="small">Connecté à ${esc(PLATFORMS[account.platform])} : les abonnés se mettent à jour tout seuls. <button type="button" class="btn small" data-action="twitch-disconnect" data-id="${esc(account.id)}">Déconnecter</button></p>` : ""}
       ${account ? '<p class="muted small">Supprimer le compte efface aussi ses relevés de chiffres. Les vidéos sont gardées.</p>' : ""}`,
     async onSubmit(data) {
       const platform = data.get("platform");
       const row = { platform: platform in PLATFORMS ? platform : "youtube", name: text(data, "name"), handle: text(data, "handle") };
+      const igToken = instagram.cleanToken(data.get("ig_token"));
+      if (igToken && row.platform === "instagram") {
+        let profile;
+        try {
+          profile = await instagram.fetchProfile(igToken);
+        } catch (err) {
+          return err instanceof instagram.InstagramExpired
+            ? "Cette clé n'est pas acceptée par Instagram : regénère-la chez Meta et recolle-la en entier."
+            : `Instagram ne répond pas : ${err.message}.`;
+        }
+        Object.assign(row, { access_token: igToken, token_expires_at: instagram.freshExpiry(), external_id: profile.id, avatar_url: profile.avatar });
+        if (!row.handle) row.handle = `@${profile.username}`;
+        if (!row.name) row.name = profile.username;
+        if (account) delete state.reconnect[account.id];
+        setTimeout(() => syncConnected({ quiet: false }), 0);
+      }
       if (!row.name) return "Donne un nom au compte.";
       if (!account) row.position = state.db.accounts.filter((x) => x.platform === row.platform).length;
       if (account && account.platform === "youtube" && (row.platform !== "youtube" || row.handle !== account.handle)) {
@@ -1706,6 +1764,10 @@ const actions = {
     render();
   },
   "go-accounts": () => go("accounts"),
+  "account-platform": (el) => {
+    const box = modal.querySelector("[data-ig]");
+    if (box) box.hidden = el.value !== "instagram";
+  },
   "twitch-connect": () => {
     if (modal.open) modal.close();
     twitch.startLogin();
@@ -1714,12 +1776,12 @@ const actions = {
     const account = find("accounts", el.dataset.id);
     if (!account?.access_token) return;
     const token = account.access_token;
-    const saved = await run(() => store.update("accounts", account.id, { access_token: null, token_expires_at: null }), "Twitch déconnecté");
+    const saved = await run(() => store.update("accounts", account.id, { access_token: null, token_expires_at: null }), `${PLATFORMS[account.platform]} déconnecté`);
     if (!saved) return;
     Object.assign(account, saved);
     delete state.live[account.id];
     delete state.reconnect[account.id];
-    twitch.revoke(token);
+    if (account.platform === "twitch") twitch.revoke(token);
     if (modal.open) modal.close();
     render();
   },
