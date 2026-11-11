@@ -1175,7 +1175,7 @@ async function syncConnected({ quiet = true } = {}) {
     for (const account of instagramList) {
       try {
         const patch = {};
-        if (instagram.shouldRefresh(account.token_expires_at)) {
+        if (instagram.shouldRefresh(account.access_token, account.token_expires_at)) {
           try {
             const fresh = await instagram.refresh(account.access_token);
             patch.access_token = fresh.token;
@@ -1185,7 +1185,7 @@ async function syncConnected({ quiet = true } = {}) {
             console.warn("Prolongation de la clé Instagram reportée", err);
           }
         }
-        const profile = await instagram.fetchProfile(patch.access_token || account.access_token);
+        const profile = await instagram.fetchProfile(patch.access_token || account.access_token, account.external_id);
         delete state.reconnect[account.id];
         if (profile.followers !== null) await saveFollowers(account, profile.followers);
         patch.synced_at = new Date().toISOString();
@@ -1295,7 +1295,8 @@ function accountForm(account, defaults = {}) {
         "Clé d'accès Instagram",
         `<input type="password" name="ig_token" autocomplete="off" spellcheck="false" placeholder="${account?.platform === "instagram" && account.access_token ? "Déjà connecté : colle une nouvelle clé pour la remplacer" : "Colle ici la clé générée chez Meta"}">`
       )}
-      <p class="muted small">Avec la clé, les abonnés et la photo se mettent à jour tout seuls. Régie la prolonge elle-même tant que tu l'ouvres au moins une fois tous les 60 jours.</p></div>
+      ${field("Numéro du compte Instagram", `<input type="text" name="ig_id" inputmode="numeric" value="${esc(a.platform === "instagram" ? a.external_id || "" : "")}" placeholder="Le numéro affiché sous le nom du compte chez Meta">`)}
+      <p class="muted small">Avec la clé, les abonnés et la photo se mettent à jour tout seuls. Si un jour la clé expire, le compte affiche « À reconnecter » : il suffit d'en coller une nouvelle.</p></div>
       ${account?.access_token ? `<p class="small">Connecté à ${esc(PLATFORMS[account.platform])} : les abonnés se mettent à jour tout seuls. <button type="button" class="btn small" data-action="twitch-disconnect" data-id="${esc(account.id)}">Déconnecter</button></p>` : ""}
       ${account ? '<p class="muted small">Supprimer le compte efface aussi ses relevés de chiffres. Les vidéos sont gardées.</p>' : ""}`,
     async onSubmit(data) {
@@ -1304,14 +1305,16 @@ function accountForm(account, defaults = {}) {
       const igToken = instagram.cleanToken(data.get("ig_token"));
       if (igToken && row.platform === "instagram") {
         let profile;
+        const igId = instagram.cleanId(data.get("ig_id")) || account?.external_id;
         try {
-          profile = await instagram.fetchProfile(igToken);
+          profile = await instagram.fetchProfile(igToken, igId);
         } catch (err) {
+          if (err instanceof instagram.MissingId) return "Ajoute aussi le numéro du compte : chez Meta, c'est le numéro écrit sous le nom du compte, à côté de « Générer un token ».";
           return err instanceof instagram.InstagramExpired
             ? "Cette clé n'est pas acceptée par Instagram : regénère-la chez Meta et recolle-la en entier."
             : `Instagram ne répond pas : ${err.message}.`;
         }
-        Object.assign(row, { access_token: igToken, token_expires_at: instagram.freshExpiry(), external_id: profile.id, avatar_url: profile.avatar });
+        Object.assign(row, { access_token: igToken, token_expires_at: instagram.isUnified(igToken) ? null : instagram.freshExpiry(), external_id: profile.id, avatar_url: profile.avatar });
         if (!row.handle) row.handle = `@${profile.username}`;
         if (!row.name) row.name = profile.username;
         if (account) delete state.reconnect[account.id];

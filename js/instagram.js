@@ -1,6 +1,10 @@
 // Chiffres des comptes Instagram pro, avec la clé d'accès générée dans l'espace développeur Meta.
-// La clé dure 60 jours ; Régie la prolonge toute seule à chaque ouverture (au plus une fois par jour).
+// Deux sortes de clés existent :
+// - « IG… » (connexion Instagram) : lues sur graph.instagram.com, prolongées par Régie (au plus une fois par jour) ;
+// - « EAA… » (connexion unifiée, celle des nouvelles apps Meta) : lues sur graph.facebook.com
+//   avec le numéro du compte Instagram ; elles ne se prolongent pas depuis le navigateur.
 const API = "https://graph.instagram.com";
+const FB_API = "https://graph.facebook.com/v23.0";
 const DAY = 24 * 60 * 60 * 1000;
 
 export class InstagramExpired extends Error {
@@ -9,8 +13,16 @@ export class InstagramExpired extends Error {
   }
 }
 
-async function call(path, params) {
-  const response = await fetch(`${API}${path}?${new URLSearchParams(params)}`);
+export const isUnified = (token) => String(token || "").startsWith("EAA");
+
+export class MissingId extends Error {
+  constructor() {
+    super("numéro du compte Instagram manquant");
+  }
+}
+
+async function call(path, params, base = API) {
+  const response = await fetch(`${base}${path}?${new URLSearchParams(params)}`);
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.error) {
     const err = data.error || {};
@@ -24,11 +36,18 @@ export function cleanToken(value) {
   return String(value || "").replace(/\s+/g, "");
 }
 
-export async function fetchProfile(token) {
-  const data = await call("/me", {
-    fields: "user_id,username,name,followers_count,media_count,profile_picture_url",
-    access_token: token,
-  });
+export function cleanId(value) {
+  return String(value || "").replace(/\D+/g, "");
+}
+
+export async function fetchProfile(token, id) {
+  let data;
+  if (isUnified(token)) {
+    if (!id) throw new MissingId();
+    data = await call(`/${encodeURIComponent(id)}`, { fields: "id,username,name,followers_count,media_count,profile_picture_url", access_token: token }, FB_API);
+  } else {
+    data = await call("/me", { fields: "user_id,username,name,followers_count,media_count,profile_picture_url", access_token: token });
+  }
   return {
     id: String(data.user_id || data.id),
     username: data.username,
@@ -40,7 +59,8 @@ export async function fetchProfile(token) {
 }
 
 // Une clé ne peut être prolongée qu'après 24 h ; on le fait dès que c'est possible.
-export function shouldRefresh(expiresAt) {
+export function shouldRefresh(token, expiresAt) {
+  if (isUnified(token)) return false;
   if (!expiresAt) return true;
   return new Date(expiresAt).getTime() - Date.now() < 59 * DAY;
 }
