@@ -49,6 +49,37 @@ async function profile(accessToken: string) {
   };
 }
 
+// Envoie une vidéo (rangée dans le stockage Supabase de l'utilisateur) dans la boîte de réception TikTok,
+// en brouillon : l'utilisateur termine la publication dans l'appli TikTok.
+async function sendDraft(req: Request, accessToken: string, path: string) {
+  const file = await fetch(`${Deno.env.get("SUPABASE_URL")}/storage/v1/object/media/${path.split("/").map(encodeURIComponent).join("/")}`, {
+    headers: { Authorization: req.headers.get("authorization") ?? "", apikey: req.headers.get("apikey") ?? "" },
+  });
+  if (!file.ok) throw new Error("vidéo introuvable dans le stockage de Régie");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const size = bytes.byteLength;
+  const init = await fetch("https://open.tiktokapis.com/v2/post/publish/inbox/video/init/", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json; charset=UTF-8" },
+    body: JSON.stringify({ source_info: { source: "FILE_UPLOAD", video_size: size, chunk_size: size, total_chunk_count: 1 } }),
+  });
+  const started = await init.json().catch(() => ({}));
+  if (!init.ok || (started.error && started.error.code !== "ok")) {
+    const code = started.error?.code ?? "";
+    const message = code === "scope_not_authorized"
+      ? "TikTok n'a pas encore donné le droit d'envoyer des vidéos : reconnecte ce compte TikTok dans Régie"
+      : started.error?.message || `TikTok ${init.status}`;
+    throw new Error(message);
+  }
+  const put = await fetch(started.data.upload_url, {
+    method: "PUT",
+    headers: { "Content-Type": file.headers.get("content-type") || "video/mp4", "Content-Range": `bytes 0-${size - 1}/${size}` },
+    body: bytes,
+  });
+  if (!put.ok) throw new Error(`envoi de la vidéo refusé par TikTok (${put.status})`);
+  return started.data.publish_id as string;
+}
+
 // Vérifie que l'appel vient d'un utilisateur connecté à Régie.
 async function signedIn(req: Request) {
   const auth = req.headers.get("authorization") ?? "";
@@ -65,13 +96,25 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return new Response(JSON.stringify({ error: "méthode non prise en charge" }), { status: 405, headers });
   if (!(await signedIn(req))) return new Response(JSON.stringify({ error: "connecte-toi à Régie" }), { status: 401, headers });
   if (!KEY || !SECRET) return new Response(JSON.stringify({ error: "TikTok n'est pas encore configuré" }), { status: 500, headers });
+  let t: Record<string, any> | undefined;
   try {
     const body = await req.json();
-    let t;
     if (body.action === "exchange" && typeof body.code === "string") {
       t = await token({ code: body.code, grant_type: "authorization_code", redirect_uri: REDIRECT });
     } else if (body.action === "sync" && typeof body.refresh_token === "string") {
       t = await token({ refresh_token: body.refresh_token, grant_type: "refresh_token" });
+    } else if (body.action === "draft" && typeof body.refresh_token === "string" && typeof body.path === "string") {
+      t = await token({ refresh_token: body.refresh_token, grant_type: "refresh_token" });
+      const publishId = await sendDraft(req, t.access_token, body.path);
+      return new Response(
+        JSON.stringify({
+          access_token: t.access_token,
+          refresh_token: t.refresh_token,
+          refresh_expires_at: new Date(Date.now() + (t.refresh_expires_in ?? 31536000) * 1000).toISOString(),
+          publish_id: publishId,
+        }),
+        { headers }
+      );
     } else {
       return new Response(JSON.stringify({ error: "demande non reconnue" }), { status: 400, headers });
     }
@@ -87,6 +130,8 @@ Deno.serve(async (req) => {
     );
   } catch (err) {
     const e = err as Error & { expired?: boolean };
-    return new Response(JSON.stringify({ error: e.message, expired: Boolean(e.expired) }), { status: e.expired ? 401 : 502, headers });
+    // Si la connexion a été renouvelée avant l'erreur, on renvoie quand même les nouvelles clés.
+    const tokens = t ? { access_token: t.access_token, refresh_token: t.refresh_token } : undefined;
+    return new Response(JSON.stringify({ error: e.message, expired: Boolean(e.expired), tokens }), { status: e.expired ? 401 : 502, headers });
   }
 });

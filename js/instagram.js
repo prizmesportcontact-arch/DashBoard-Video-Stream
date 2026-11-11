@@ -73,3 +73,43 @@ export async function refresh(token) {
 export function freshExpiry() {
   return new Date(Date.now() + 60 * DAY).toISOString();
 }
+
+// Publication d'un Reel : Instagram télécharge la vidéo depuis un lien temporaire, la prépare, puis on la publie.
+// Seules les clés « EAA… » (connexion unifiée) passent par graph.facebook.com ; les clés « IG… » par graph.instagram.com.
+async function post(path, params, token) {
+  const base = isUnified(token) ? FB_API : API;
+  const response = await fetch(`${base}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ ...params, access_token: token }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.error) {
+    const err = data.error || {};
+    if (err.code === 190) throw new InstagramExpired(err.message);
+    if (err.code === 10 || err.code === 200) throw new Error("la clé de ce compte n'a pas le droit de publier : regénère-la chez Meta");
+    throw new Error(err.error_user_msg || err.message || `Instagram a répondu ${response.status}`);
+  }
+  return data;
+}
+
+export async function publishReel({ token, id, videoUrl, caption, onStep = () => {} }) {
+  if (isUnified(token) && !id) throw new MissingId();
+  const owner = isUnified(token) ? id : "me";
+  onStep("Instagram récupère la vidéo");
+  const container = await post(`/${owner}/media`, { media_type: "REELS", video_url: videoUrl, caption: caption || "", share_to_feed: "true" }, token);
+  const base = isUnified(token) ? FB_API : API;
+  const started = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 4000));
+    const res = await fetch(`${base}/${container.id}?${new URLSearchParams({ fields: "status_code,status", access_token: token })}`);
+    const data = await res.json().catch(() => ({}));
+    if (data.status_code === "FINISHED") break;
+    if (data.status_code === "ERROR" || data.status_code === "EXPIRED") throw new Error(`Instagram n'a pas pu préparer la vidéo (${data.status || data.status_code})`);
+    if (Date.now() - started > 8 * 60 * 1000) throw new Error("Instagram met trop de temps à préparer la vidéo, réessaie plus tard");
+    onStep("Instagram prépare la vidéo");
+  }
+  onStep("Publication");
+  const published = await post(`/${owner}/media_publish`, { creation_id: container.id }, token);
+  return published.id;
+}

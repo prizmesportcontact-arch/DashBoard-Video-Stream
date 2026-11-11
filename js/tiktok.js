@@ -26,7 +26,7 @@ export function startLogin() {
   sessionStorage.setItem(STATE_KEY, state);
   const params = new URLSearchParams({
     client_key: TIKTOK_CLIENT_KEY,
-    scope: "user.info.basic,user.info.profile,user.info.stats",
+    scope: "user.info.basic,user.info.profile,user.info.stats,video.upload",
     response_type: "code",
     redirect_uri: TWITCH_REDIRECT,
     state,
@@ -58,11 +58,13 @@ export function takePendingCode() {
 }
 
 async function call(body) {
-  const { data, error, expired } = await store.callFunction("tiktok", body);
+  const { data, error, expired, tokens } = await store.callFunction("tiktok", body);
   if (expired) throw new TikTokExpired();
-  if (error) throw new Error(error);
+  if (error) throw Object.assign(new Error(error), { tokens });
   return data;
 }
 
 export const exchange = (code) => call({ action: "exchange", code });
 export const sync = (refreshToken) => call({ action: "sync", refresh_token: refreshToken });
+// Envoie une vidéo du stockage de Régie dans la boîte TikTok du compte, en brouillon.
+export const sendDraft = (refreshToken, path) => call({ action: "draft", refresh_token: refreshToken, path });

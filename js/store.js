@@ -1,7 +1,7 @@
 // Accès aux données : Supabase quand il est configuré, sinon stockage local (mode démo).
 import { SUPABASE_URL, SUPABASE_KEY } from "./config.js";
 
-export const TABLES = ["accounts", "videos", "ideas", "tasks", "goals", "metrics", "notes", "time_entries", "review_comments"];
+export const TABLES = ["accounts", "videos", "ideas", "tasks", "goals", "metrics", "notes", "time_entries", "review_comments", "publications"];
 export const isCloud = Boolean(SUPABASE_URL && SUPABASE_KEY);
 
 let client = null;
@@ -175,6 +175,18 @@ export async function mediaUrl(path) {
   return data.signedUrl;
 }
 
+// Envoie un fichier vidéo dans le stockage de l'utilisateur (dossier à son identifiant).
+export async function uploadMedia(file, folder = "publish") {
+  if (!isCloud) throw new Error("la publication fonctionne seulement avec le compte en ligne");
+  const { data: session } = await client.auth.getSession();
+  const uid = session.session?.user?.id;
+  const ext = (file.name.match(/\.(mp4|mov|webm|m4v)$/i)?.[1] || "mp4").toLowerCase();
+  const path = `${uid}/${folder}/${crypto.randomUUID()}.${ext}`;
+  const { error } = await client.storage.from(BUCKET).upload(path, file, { contentType: file.type || "video/mp4", upsert: false });
+  fail(error);
+  return path;
+}
+
 export async function removeMedia(path) {
   if (!isCloud) return;
   const { error } = await client.storage.from(BUCKET).remove([path]);
@@ -195,6 +207,6 @@ export async function callFunction(name, body) {
     body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) return { error: data.error || `le serveur a répondu ${response.status}`, expired: Boolean(data.expired) };
+  if (!response.ok) return { error: data.error || `le serveur a répondu ${response.status}`, expired: Boolean(data.expired), tokens: data.tokens };
   return { data };
 }

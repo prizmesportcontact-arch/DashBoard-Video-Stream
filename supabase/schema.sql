@@ -214,3 +214,24 @@ alter table public.accounts add column if not exists refresh_token text;
 
 -- Nombre de vidéos / publications sur la plateforme (mis à jour automatiquement).
 alter table public.accounts add column if not exists content_count integer;
+
+-- Publication : historique des envois vers Instagram (Reels) et TikTok (brouillons).
+create table if not exists public.publications (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  video_id uuid references public.videos (id) on delete set null,
+  caption text,
+  media_path text,
+  file_name text,
+  targets jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.publications enable row level security;
+revoke all on public.publications from anon;
+create policy "publications_select" on public.publications for select to authenticated using (user_id = (select auth.uid()));
+create policy "publications_insert" on public.publications for insert to authenticated with check (user_id = (select auth.uid()));
+create policy "publications_update" on public.publications for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+create policy "publications_delete" on public.publications for delete to authenticated using (user_id = (select auth.uid()));
+create index if not exists publications_user_idx on public.publications (user_id, created_at desc);
+create trigger publications_touch before update on public.publications for each row execute function public.touch_updated_at();

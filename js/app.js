@@ -28,6 +28,7 @@ const ROUTES = [
   ["time-stats", "Statistiques", "", "time"],
   ["notes", "Notes", '<path d="M6 3.5h9l4 4V20a.5.5 0 0 1-.5.5h-12A.5.5 0 0 1 6 20z"/><path d="M9 12h6M9 16h4"/>'],
   ["ideas", "Idées", '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.3 1 2.1h5c0-.8.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>'],
+  ["publish", "Publication", '<path d="M12 15V4"/><path d="m7.5 8.5 4.5-4.5 4.5 4.5"/><path d="M5 14v5.5h14V14"/>'],
   ["stats", "Stats", '<path d="M4 20V4"/><path d="M4 20h16"/><path d="m7.5 15 4-4.5 3 3L20 7"/>'],
   ["accounts", "Comptes", '<circle cx="9" cy="8.5" r="3.5"/><path d="M3 20c.8-3.5 3.2-5.5 6-5.5s5.2 2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M18.5 20c-.3-1.9-1-3.4-2.1-4.5"/>'],
 ];
@@ -38,7 +39,7 @@ const PROJECT_COLORS = ["#12d6c5", "#ff3d7f", "#8257ff", "#f5a524", "#3ecf6e", "
 const HOME_BLOCKS = ["week", "figures", "today", "upcoming", "goals", "recent", "thumbs"];
 
 const state = {
-  db: { accounts: [], videos: [], ideas: [], tasks: [], goals: [], metrics: [], notes: [], time_entries: [], review_comments: [] },
+  db: { accounts: [], videos: [], ideas: [], tasks: [], goals: [], metrics: [], notes: [], time_entries: [], review_comments: [], publications: [] },
   user: null,
   route: "home",
   videoView: "list",
@@ -63,6 +64,12 @@ const state = {
   loadedAt: 0,
   statsRange: 30,
   statsPlatform: null,
+  pubFile: null,
+  pubPreview: null,
+  pubCaption: "",
+  pubVideo: null,
+  pubRunning: false,
+  pubSteps: {},
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -274,7 +281,7 @@ function render() {
   renderNav();
   const renderers = {
     home: renderHome, videos: renderVideos, calendar: renderCalendar, ideas: renderIdeas, todo: renderTodo,
-    montage: renderMontage, accounts: renderAccounts, thumbs: renderThumbs, time: renderTime, "time-stats": renderTimeStats, notes: renderNotes, stats: renderStats,
+    montage: renderMontage, accounts: renderAccounts, thumbs: renderThumbs, time: renderTime, "time-stats": renderTimeStats, notes: renderNotes, stats: renderStats, publish: renderPublish,
   };
   if (state.route !== "montage") releaseReview();
   view.innerHTML = renderers[state.route]();
@@ -1365,6 +1372,195 @@ function bindCharts() {
   });
 }
 
+/* ---------- Publication ---------- */
+
+const MAX_UPLOAD = 50 * 1024 * 1024;
+const TARGET_LABEL = {
+  pending: "En attente",
+  running: "En cours",
+  published: "Publié",
+  draft_sent: "Dans ta boîte TikTok",
+  error: "Échec",
+};
+
+const canPublish = (a) => (a.platform === "instagram" && a.access_token) || (a.platform === "tiktok" && a.refresh_token);
+const sizeText = (bytes) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1).replace(".", ",")} Mo` : `${Math.max(1, Math.round(bytes / 1024))} ko`);
+
+function targetLine(t) {
+  const a = accountOf(t.account_id);
+  const live = state.pubSteps[`${t.account_id}`];
+  const status = t.status === "running" && live ? live : TARGET_LABEL[t.status] || t.status;
+  const cls = t.status === "published" || t.status === "draft_sent" ? "ok" : t.status === "error" ? "sponsor" : "";
+  return `<li class="pub-target p-${esc(t.platform)}">
+    ${a ? accountBadge(a) : `<i class="dot p-${esc(t.platform)}"></i>`}
+    <span class="pub-name">${esc(a?.name || PLATFORMS[t.platform])} <span class="muted small">${esc(PLATFORMS[t.platform])}</span></span>
+    <span class="tag ${cls}">${t.status === "running" ? '<i class="spin"></i>' : ""}${esc(status)}</span>
+    ${t.error ? `<span class="pub-error small">${esc(t.error)}</span>` : ""}
+  </li>`;
+}
+
+function renderPublish() {
+  const accounts = sortedAccounts().filter((a) => a.platform === "instagram" || a.platform === "tiktok");
+  const ready = accounts.filter(canPublish);
+  const history = [...state.db.publications].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const videos = state.db.videos.filter((v) => v.status !== "publie").sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+  if (!store.isCloud) {
+    return `<section class="panel glass">${emptyState("La publication fonctionne avec ton compte en ligne : connecte-toi à Régie pour l'utiliser.")}</section>`;
+  }
+  const form = ready.length
+    ? `<form class="panel glass publish-form" data-form="publish">
+      <div class="panel-head"><h2>Nouvelle publication</h2></div>
+      <label class="dropzone">
+        <input type="file" name="file" accept="video/mp4,video/quicktime,video/webm" data-action="publish-file">
+        <span class="dropzone-text"><strong>${state.pubFile ? esc(state.pubFile.name) : "Choisir la vidéo"}</strong>
+          <span class="muted small">${state.pubFile ? sizeText(state.pubFile.size) : "MP4 ou MOV, format vertical conseillé, 50 Mo maximum"}</span></span>
+      </label>
+      ${state.pubPreview ? `<video class="pub-preview" src="${esc(state.pubPreview)}" controls playsinline muted></video>` : ""}
+      ${videos.length ? field("Vidéo de Régie (facultatif)", `<select name="video_id" data-action="publish-link"><option value="">Aucune</option>${videos.map((v) => `<option value="${esc(v.id)}" ${state.pubVideo === v.id ? "selected" : ""}>${esc(v.title)}</option>`).join("")}</select>`) : ""}
+      <label class="field"><span>Légende</span><textarea name="caption" rows="5" maxlength="2200" data-caption placeholder="Texte, hashtags, mentions…">${esc(state.pubCaption)}</textarea></label>
+      <fieldset class="choices"><legend>Publier sur</legend>${accounts
+        .map((a) => {
+          const ok = canPublish(a);
+          return `<label class="choice p-${esc(a.platform)} ${ok ? "" : "is-off"}"><input type="checkbox" name="targets" value="${esc(a.id)}" ${ok ? "" : "disabled"} ${ok && (state.pubChecked || []).includes(a.id) ? "checked" : ""}><span>${accountBadge(a)}${esc(a.name)} <span class="muted small">${esc(PLATFORMS[a.platform])}</span></span></label>`;
+        })
+        .join("")}</fieldset>
+      <ul class="pub-notes muted small">
+        <li><strong>Instagram</strong> : publié directement en Reel, avec la légende.</li>
+        <li><strong>TikTok</strong> : la vidéo arrive dans tes notifications TikTok. Ouvre-la, colle la légende (Régie la copie pour toi) et publie. TikTok n'autorise pas encore Régie à publier directement.</li>
+      </ul>
+      <p class="form-error" role="alert" hidden></p>
+      <div class="modal-actions"><span class="spacer"></span><button type="submit" class="btn primary" ${state.pubRunning ? "disabled" : ""}>${state.pubRunning ? "Publication en cours…" : "Publier"}</button></div>
+    </form>`
+    : `<section class="panel glass">${emptyState("Connecte d'abord un compte Instagram ou TikTok dans Comptes pour publier depuis Régie.", "go-accounts", "Ouvrir Comptes")}</section>`;
+  const list = history.length
+    ? `<ul class="rows pub-history">${history
+        .map((p) => {
+          const v = p.video_id ? find("videos", p.video_id) : null;
+          const hasDraft = p.targets.some((t) => t.status === "draft_sent");
+          return `<li class="pub-item">
+            <div class="pub-top"><span class="row-title">${esc(v?.title || p.file_name || "Vidéo")}</span><span class="muted small">${esc(when(p.created_at))}</span></div>
+            ${p.caption ? `<p class="pub-caption small">${esc(p.caption)}</p>` : ""}
+            <ul class="pub-targets">${p.targets.map(targetLine).join("")}</ul>
+            <div class="pub-actions">
+              ${hasDraft && p.caption ? `<button type="button" class="btn small" data-action="publish-copy" data-id="${esc(p.id)}">Copier la légende</button>` : ""}
+              ${p.targets.some((t) => t.status === "error") && p.media_path ? `<button type="button" class="btn small" data-action="publish-retry" data-id="${esc(p.id)}" ${state.pubRunning ? "disabled" : ""}>Réessayer</button>` : ""}
+              <button type="button" class="btn small ghost" data-action="publish-delete" data-id="${esc(p.id)}">Retirer de l'historique</button>
+            </div>
+          </li>`;
+        })
+        .join("")}</ul>`
+    : `<p class="muted small">Tes publications apparaîtront ici, avec leur état sur chaque compte.</p>`;
+  return `<div class="home publish">${form}<section class="panel glass align-start"><div class="panel-head"><h2>Historique</h2></div>${list}</section></div>`;
+}
+
+// Garde la légende et la vidéo liée quand la page se redessine (choix du fichier).
+function keepPublishDraft() {
+  const box = view.querySelector("[data-caption]");
+  if (box) state.pubCaption = box.value;
+  const link = view.querySelector('select[name="video_id"]');
+  if (link) state.pubVideo = link.value || null;
+  state.pubChecked = [...view.querySelectorAll('input[name="targets"]:checked')].map((i) => i.value);
+}
+
+async function savePublication(pub) {
+  const saved = await store.update("publications", pub.id, { targets: pub.targets, media_path: pub.media_path });
+  Object.assign(pub, saved);
+}
+
+async function runTargets(pub) {
+  state.pubRunning = true;
+  if (state.route === "publish") render();
+  let videoUrl = null;
+  const jobs = pub.targets.map(async (t, index) => {
+    if (t.status === "published" || t.status === "draft_sent") return;
+    const account = accountOf(t.account_id);
+    const step = (text) => {
+      state.pubSteps[t.account_id] = text;
+      if (state.route === "publish") render();
+    };
+    pub.targets[index] = { ...t, status: "running", error: null };
+    step("Envoi");
+    try {
+      if (!account || !canPublish(account)) throw new Error("ce compte n'est plus connecté");
+      if (account.platform === "instagram") {
+        videoUrl ||= await store.mediaUrl(pub.media_path);
+        const id = await instagram.publishReel({ token: account.access_token, id: account.external_id, videoUrl, caption: pub.caption, onStep: step });
+        pub.targets[index] = { ...pub.targets[index], status: "published", remote_id: id, done_at: new Date().toISOString() };
+      } else {
+        step("Envoi vers TikTok");
+        const res = await tiktok.sendDraft(account.refresh_token, pub.media_path);
+        Object.assign(account, await store.update("accounts", account.id, { access_token: res.access_token, refresh_token: res.refresh_token, token_expires_at: res.refresh_expires_at }));
+        pub.targets[index] = { ...pub.targets[index], status: "draft_sent", remote_id: res.publish_id, done_at: new Date().toISOString() };
+      }
+    } catch (err) {
+      console.error(err);
+      if (err instanceof instagram.InstagramExpired || err instanceof tiktok.TikTokExpired) state.reconnect[t.account_id] = true;
+      if (err.tokens?.refresh_token && account) {
+        await store.update("accounts", account.id, { access_token: err.tokens.access_token, refresh_token: err.tokens.refresh_token }).then((row) => Object.assign(account, row)).catch(() => {});
+      }
+      pub.targets[index] = { ...pub.targets[index], status: "error", error: err.message };
+    }
+    delete state.pubSteps[t.account_id];
+    await savePublication(pub).catch((e) => console.warn(e));
+    if (state.route === "publish") render();
+  });
+  await Promise.all(jobs);
+  // La vidéo n'est plus utile une fois envoyée partout : on libère la place.
+  if (pub.targets.every((t) => t.status === "published" || t.status === "draft_sent") && pub.media_path) {
+    await store.removeMedia(pub.media_path).catch((e) => console.warn(e));
+    pub.media_path = null;
+    await savePublication(pub).catch((e) => console.warn(e));
+  }
+  state.pubRunning = false;
+  const okCount = pub.targets.filter((t) => t.status !== "error").length;
+  toast(okCount === pub.targets.length ? "Publication terminée" : `${pub.targets.length - okCount} envoi${pub.targets.length - okCount > 1 ? "s" : ""} en échec : regarde l'historique.`, okCount !== pub.targets.length);
+  if (pub.caption && pub.targets.some((t) => t.status === "draft_sent")) navigator.clipboard?.writeText(pub.caption).catch(() => {});
+  if (state.route === "publish") render();
+}
+
+async function submitPublish(form) {
+  const data = new FormData(form);
+  const error = form.querySelector(".form-error");
+  const fail = (message) => {
+    error.textContent = message;
+    error.hidden = false;
+  };
+  const file = state.pubFile;
+  const ids = data.getAll("targets");
+  if (!file) return fail("Choisis la vidéo à publier.");
+  if (file.size > MAX_UPLOAD) return fail(`Cette vidéo fait ${sizeText(file.size)} : la limite est de 50 Mo. Exporte-la un peu plus légère.`);
+  if (!ids.length) return fail("Coche au moins un compte.");
+  const caption = String(data.get("caption") || "").trim();
+  state.pubCaption = caption;
+  state.pubRunning = true;
+  render();
+  let pub;
+  try {
+    toast("Envoi de la vidéo…");
+    const path = await store.uploadMedia(file);
+    pub = await store.insert("publications", {
+      video_id: text(data, "video_id"),
+      caption,
+      media_path: path,
+      file_name: file.name,
+      targets: ids.map((id) => ({ account_id: id, platform: accountOf(id)?.platform, status: "pending" })),
+    });
+    state.db.publications.push(pub);
+  } catch (err) {
+    console.error(err);
+    state.pubRunning = false;
+    toast(`Envoi impossible : ${err.message}.`, true);
+    render();
+    return;
+  }
+  if (state.pubPreview) URL.revokeObjectURL(state.pubPreview);
+  state.pubFile = null;
+  state.pubPreview = null;
+  state.pubCaption = "";
+  state.pubVideo = null;
+  await runTargets(pub);
+}
+
 /* ---------- Comptes ---------- */
 
 function connectionTag(a) {
@@ -1484,6 +1680,9 @@ async function syncConnected({ quiet = true } = {}) {
         Object.assign(account, await store.update("accounts", account.id, patch));
         changed = true;
       } catch (err) {
+        if (err.tokens?.refresh_token) {
+          await store.update("accounts", account.id, { access_token: err.tokens.access_token, refresh_token: err.tokens.refresh_token }).then((row) => Object.assign(account, row)).catch(() => {});
+        }
         if (err instanceof tiktok.TikTokExpired) {
           state.reconnect[account.id] = true;
           changed = true;
@@ -2098,6 +2297,45 @@ const actions = {
     render();
   },
   "go-accounts": () => go("accounts"),
+  "publish-file": (el) => {
+    const file = el.files?.[0] || null;
+    if (state.pubPreview) URL.revokeObjectURL(state.pubPreview);
+    state.pubFile = file;
+    state.pubPreview = file ? URL.createObjectURL(file) : null;
+    keepPublishDraft();
+    render();
+  },
+  "publish-link": (el) => {
+    state.pubVideo = el.value || null;
+    const v = state.pubVideo ? find("videos", state.pubVideo) : null;
+    const box = view.querySelector("[data-caption]");
+    if (v && box && !box.value.trim()) box.value = v.title || "";
+  },
+  "publish-copy": async (el) => {
+    const pub = find("publications", el.dataset.id);
+    if (!pub?.caption) return;
+    try {
+      await navigator.clipboard.writeText(pub.caption);
+      toast("Légende copiée : colle-la dans TikTok");
+    } catch {
+      toast("Copie impossible : sélectionne la légende à la main.", true);
+    }
+  },
+  "publish-retry": (el) => {
+    const pub = find("publications", el.dataset.id);
+    if (pub && !state.pubRunning) runTargets(pub);
+  },
+  "publish-delete": async (el) => {
+    const pub = find("publications", el.dataset.id);
+    if (!pub || state.pubRunning) return;
+    const ok = await run(async () => {
+      if (pub.media_path) await store.removeMedia(pub.media_path).catch(() => {});
+      await store.remove("publications", pub.id);
+      return true;
+    }, "Retiré de l'historique");
+    if (ok) state.db.publications = state.db.publications.filter((x) => x.id !== pub.id);
+    render();
+  },
   "stats-range": (el) => {
     state.statsRange = Number(el.dataset.range) || 0;
     render();
@@ -2307,6 +2545,10 @@ view.addEventListener("submit", async (event) => {
   if (!form) return;
   event.preventDefault();
   const data = new FormData(form);
+  if (form.dataset.form === "publish") {
+    if (!state.pubRunning) await submitPublish(form);
+    return;
+  }
   if (form.dataset.form === "time-start") {
     if (running()) return;
     const saved = await run(
