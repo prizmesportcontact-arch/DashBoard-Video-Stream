@@ -208,3 +208,6 @@ alter table public.accounts
   add column if not exists token_expires_at timestamptz,
   add column if not exists synced_at timestamptz;
 create unique index if not exists accounts_external_key on public.accounts (user_id, platform, external_id) where external_id is not null;
+
+-- Connexion TikTok : jeton de renouvellement (protégé par les règles RLS du compte).
+alter table public.accounts add column if not exists refresh_token text;

@@ -180,3 +180,21 @@ export async function removeMedia(path) {
   const { error } = await client.storage.from(BUCKET).remove([path]);
   fail(error);
 }
+
+// Appelle une fonction Supabase (côté serveur) avec la session de l'utilisateur connecté.
+export async function callFunction(name, body) {
+  if (!isCloud) return { error: "disponible seulement avec le compte en ligne" };
+  const { data: session } = await client.auth.getSession();
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${session.session?.access_token ?? SUPABASE_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return { error: data.error || `le serveur a répondu ${response.status}`, expired: Boolean(data.expired) };
+  return { data };
+}

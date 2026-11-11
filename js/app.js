@@ -3,6 +3,7 @@ import * as store from "./store.js";
 import * as twitch from "./twitch.js";
 import * as youtube from "./youtube.js";
 import * as instagram from "./instagram.js";
+import * as tiktok from "./tiktok.js";
 
 /* ---------- Références ---------- */
 
@@ -381,8 +382,8 @@ const homeBlocks = {
           ${state.live[a.id] ? `<div class="live-badge"><i></i>En live, ${fmt.num.format(state.live[a.id].viewers)} viewers</div>` : ""}
           ${
             state.reconnect[a.id]
-              ? a.platform === "twitch"
-                ? `<button type="button" class="btn small" data-action="twitch-connect">Reconnecter Twitch</button>`
+              ? a.platform === "twitch" || a.platform === "tiktok"
+                ? `<button type="button" class="btn small" data-action="${a.platform}-connect">Reconnecter ${esc(PLATFORMS[a.platform])}</button>`
                 : `<button type="button" class="btn small" data-action="edit-account" data-id="${esc(a.id)}">Recoller la clé ${esc(PLATFORMS[a.platform])}</button>`
               : ""
           }
@@ -1131,7 +1132,8 @@ async function syncConnected({ quiet = true } = {}) {
   const twitchList = twitch.enabled ? state.db.accounts.filter((a) => a.platform === "twitch" && a.access_token && a.external_id) : [];
   const youtubeList = youtube.enabled ? state.db.accounts.filter((a) => a.platform === "youtube" && (a.external_id || a.handle)) : [];
   const instagramList = state.db.accounts.filter((a) => a.platform === "instagram" && a.access_token);
-  if (!twitchList.length && !youtubeList.length && !instagramList.length) return;
+  const tiktokList = tiktok.enabled ? state.db.accounts.filter((a) => a.platform === "tiktok" && a.refresh_token) : [];
+  if (!twitchList.length && !youtubeList.length && !instagramList.length && !tiktokList.length) return;
   state.syncing = true;
   let changed = false;
   const report = (label, err) => {
@@ -1200,6 +1202,28 @@ async function syncConnected({ quiet = true } = {}) {
         } else report("Instagram", err);
       }
     }
+    for (const account of tiktokList) {
+      try {
+        const res = await tiktok.sync(account.refresh_token);
+        delete state.reconnect[account.id];
+        if (res.profile.followers !== null) await saveFollowers(account, res.profile.followers);
+        const patch = {
+          access_token: res.access_token,
+          refresh_token: res.refresh_token,
+          token_expires_at: res.refresh_expires_at,
+          synced_at: new Date().toISOString(),
+        };
+        if (res.profile.id && account.external_id !== res.profile.id) patch.external_id = res.profile.id;
+        if (res.profile.avatar) patch.avatar_url = res.profile.avatar;
+        Object.assign(account, await store.update("accounts", account.id, patch));
+        changed = true;
+      } catch (err) {
+        if (err instanceof tiktok.TikTokExpired) {
+          state.reconnect[account.id] = true;
+          changed = true;
+        } else report("TikTok", err);
+      }
+    }
   } finally {
     state.syncing = false;
   }
@@ -1239,6 +1263,44 @@ async function finishTwitchConnect(token) {
 
 
 
+async function finishTikTokConnect(code) {
+  try {
+    const res = await tiktok.exchange(code);
+    const p = res.profile;
+    const norm = (v) => String(v || "").replace(/^@/, "").toLowerCase();
+    const tiktokAccounts = state.db.accounts.filter((a) => a.platform === "tiktok");
+    const unlinked = tiktokAccounts.filter((a) => !a.external_id);
+    const existing =
+      tiktokAccounts.find((a) => a.external_id === p.id) ||
+      (p.username && unlinked.find((a) => norm(a.handle) === norm(p.username))) ||
+      (unlinked.length === 1 ? unlinked[0] : null);
+    const row = {
+      platform: "tiktok",
+      external_id: p.id,
+      avatar_url: p.avatar,
+      access_token: res.access_token,
+      refresh_token: res.refresh_token,
+      token_expires_at: res.refresh_expires_at,
+      synced_at: new Date().toISOString(),
+    };
+    if (p.username) row.handle = `@${p.username}`;
+    let account;
+    if (existing) account = Object.assign(existing, await store.update("accounts", existing.id, row));
+    else {
+      account = await store.insert("accounts", { ...row, name: p.name || p.username || "TikTok", position: tiktokAccounts.length });
+      state.db.accounts.push(account);
+    }
+    delete state.reconnect[account.id];
+    if (p.followers !== null) await saveFollowers(account, p.followers);
+    toast(`TikTok connecté : ${account.name}`);
+    state.route = "accounts";
+    render();
+  } catch (err) {
+    console.error(err);
+    toast(`Connexion TikTok impossible : ${err.message}.`, true);
+  }
+}
+
 function renderAccounts() {
   const list = sortedAccounts();
   const counts = new Map();
@@ -1254,7 +1316,8 @@ function renderAccounts() {
       return `<section class="panel glass">
         <div class="panel-head"><h2><i class="dot p-${key}"></i> ${label}</h2>
           ${key === "twitch" && twitch.enabled ? '<button type="button" class="btn small primary" data-action="twitch-connect">Se connecter avec Twitch</button>' : ""}
-          <button type="button" class="btn small" data-action="new-account" data-platform="${key}">Ajouter${key === "twitch" && twitch.enabled ? " à la main" : " un compte"}</button></div>
+          ${key === "tiktok" && tiktok.enabled ? '<button type="button" class="btn small primary" data-action="tiktok-connect">Se connecter avec TikTok</button>' : ""}
+          <button type="button" class="btn small" data-action="new-account" data-platform="${key}">Ajouter${(key === "twitch" && twitch.enabled) || (key === "tiktok" && tiktok.enabled) ? " à la main" : " un compte"}</button></div>
         ${
           items.length
             ? `<ul class="rows">${items
@@ -1270,6 +1333,7 @@ function renderAccounts() {
             : `<p class="muted small">Aucun compte ${esc(label)}.</p>`
         }
         ${key === "youtube" && youtube.enabled ? '<p class="muted small">Le @ de chaque chaîne suffit : abonnés et photo se mettent à jour tout seuls.</p>' : ""}
+        ${key === "tiktok" && tiktok.enabled ? '<p class="muted small">Pour chaque compte : « Se connecter avec TikTok », puis connecte-toi avec ce compte. Déconnecte-toi de TikTok entre les deux.</p>' : ""}
         ${key === "instagram" ? '<p class="muted small">Ouvre un compte et colle sa clé d\'accès Meta : abonnés et photo se mettent à jour tout seuls.</p>' : ""}
       </section>`;
     })
@@ -1775,11 +1839,15 @@ const actions = {
     if (modal.open) modal.close();
     twitch.startLogin();
   },
+  "tiktok-connect": () => {
+    if (modal.open) modal.close();
+    tiktok.startLogin();
+  },
   "twitch-disconnect": async (el) => {
     const account = find("accounts", el.dataset.id);
     if (!account?.access_token) return;
     const token = account.access_token;
-    const saved = await run(() => store.update("accounts", account.id, { access_token: null, token_expires_at: null }), `${PLATFORMS[account.platform]} déconnecté`);
+    const saved = await run(() => store.update("accounts", account.id, { access_token: null, refresh_token: null, token_expires_at: null }), `${PLATFORMS[account.platform]} déconnecté`);
     if (!saved) return;
     Object.assign(account, saved);
     delete state.live[account.id];
@@ -2228,8 +2296,12 @@ async function start() {
   if (ROUTES.some(([key]) => key === hash)) state.route = hash;
   render();
   const pending = twitch.takePendingToken();
+  const tiktokCode = tiktok.takePendingCode();
   if (pending) await finishTwitchConnect(pending);
-  else syncConnected();
+  else if (tiktokCode) {
+    await finishTikTokConnect(tiktokCode);
+    syncConnected();
+  } else syncConnected();
 }
 
 document.addEventListener("visibilitychange", async () => {
@@ -2250,9 +2322,11 @@ try {
   /* thème par défaut */
 }
 
+const tiktokReturn = tiktok.captureCallback();
 const twitchReturn = twitch.enabled ? twitch.captureCallback() : null;
 
 (async () => {
+  if (tiktokReturn?.error) setTimeout(() => toast(`Connexion TikTok annulée : ${tiktokReturn.error}.`, true), 600);
   if (twitchReturn?.error) setTimeout(() => toast(`Connexion Twitch annulée : ${twitchReturn.error}.`, true), 600);
   try {
     await store.init();

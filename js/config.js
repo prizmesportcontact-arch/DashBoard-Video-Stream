@@ -13,3 +13,7 @@ export const TWITCH_REDIRECT = "https://prizmesportcontact-arch.github.io/DashBo
 
 // Chiffres YouTube : clé publique, acceptée uniquement depuis l'adresse de Régie et pour l'API YouTube.
 export const YOUTUBE_API_KEY = "AIzaSyCPf4OZZc9QYANT7FVcuV-Y8QF_74HX3uQ";
+
+// Connexion TikTok : identifiant public (« Client key ») de l'app déclarée sur developers.tiktok.com.
+// Le secret, lui, reste dans la fonction Supabase « tiktok ».
+export const TIKTOK_CLIENT_KEY = "";
