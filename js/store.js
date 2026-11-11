@@ -40,7 +40,7 @@ function fail(error) {
 
 export async function init() {
   if (!isCloud) return;
-  const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+  const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.119.0");
   client = createClient(SUPABASE_URL, SUPABASE_KEY);
 }
 

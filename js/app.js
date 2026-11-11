@@ -230,15 +230,20 @@ function render() {
 }
 
 function go(route) {
+  if (!ROUTES.some(([key]) => key === route)) return;
+  if (modal.open) modal.close();
   state.route = route;
   render();
   window.scrollTo({ top: 0 });
-  try {
-    history.replaceState(null, "", `#${route}`);
-  } catch {
-    /* navigation privée : sans importance */
-  }
+  // Chaque module a sa propre adresse : le bouton Retour et les favoris fonctionnent.
+  if (location.hash.slice(1) !== route) location.hash = route;
 }
+
+window.addEventListener("hashchange", () => {
+  const route = location.hash.slice(1) || "home";
+  if (!state.user || route === state.route || !ROUTES.some(([key]) => key === route)) return;
+  go(route);
+});
 
 /* ---------- Accueil ---------- */
 
@@ -1696,6 +1701,7 @@ function runSearch() {
     ...state.db.videos.filter((v) => match(v.title, v.notes, v.sponsor)).map((v) => ["Vidéo", "edit-video", v.id, v.title]),
     ...state.db.ideas.filter((i) => match(i.title, i.hook, i.notes, (i.tags || []).join(" "))).map((i) => ["Idée", "edit-idea", i.id, i.title]),
     ...state.db.tasks.filter((t) => match(t.title)).map((t) => ["Tâche", "edit-task", t.id, t.title]),
+    ...state.db.notes.filter((n) => match(n.title, n.body)).map((n) => ["Note", "edit-note", n.id, n.title]),
   ].slice(0, 12);
   searchResults.innerHTML = hits.length
     ? hits
