@@ -153,3 +153,20 @@ begin
   end loop;
 end;
 $$;
+
+-- Exports du monteur : fichiers vidéo privés, rangés dans un dossier par compte.
+alter table public.videos add column if not exists media_path text;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('media', 'media', false, 52428800, array['video/mp4', 'video/webm', 'video/quicktime'])
+on conflict (id) do nothing;
+
+create policy "media_owner_select" on storage.objects for select to authenticated
+  using (bucket_id = 'media' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "media_owner_insert" on storage.objects for insert to authenticated
+  with check (bucket_id = 'media' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "media_owner_update" on storage.objects for update to authenticated
+  using (bucket_id = 'media' and (storage.foldername(name))[1] = (select auth.uid())::text)
+  with check (bucket_id = 'media' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "media_owner_delete" on storage.objects for delete to authenticated
+  using (bucket_id = 'media' and (storage.foldername(name))[1] = (select auth.uid())::text);

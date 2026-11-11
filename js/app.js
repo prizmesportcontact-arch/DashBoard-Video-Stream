@@ -1,5 +1,6 @@
 import { APP_NAME } from "./config.js";
 import * as store from "./store.js";
+import * as editor from "./editor.js";
 
 /* ---------- Références ---------- */
 
@@ -17,6 +18,7 @@ const ROUTES = [
   ["home", "Tableau de bord", '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/>'],
   ["videos", "Vidéos", '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9.5 5 2.5-5 2.5z"/>'],
   ["montage", "Montage", '<path d="M4 4v16M20 4v16M4 8h16M4 16h16M9 4v4M15 4v4M9 16v4M15 16v4"/>'],
+  ["editor", "Monteur", "", "montage"],
   ["todo", "Todo", '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12.5 2.5 2.5 4.5-5.5"/>'],
   ["calendar", "Calendrier", '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'],
   ["thumbs", "Miniatures", '<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="8.5" cy="10" r="1.5"/><path d="m4 17 5-4 4 3 3-2 4 3"/>'],
@@ -25,7 +27,7 @@ const ROUTES = [
   ["notes", "Notes", '<path d="M6 3.5h9l4 4V20a.5.5 0 0 1-.5.5h-12A.5.5 0 0 1 6 20z"/><path d="M9 12h6M9 16h4"/>'],
   ["ideas", "Idées", '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.3 1 2.1h5c0-.8.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>'],
 ];
-const SUBS = { time: [["time", "Journée"], ["time-stats", "Statistiques"]] };
+const SUBS = { montage: [["montage", "Retours"], ["editor", "Monteur"]], time: [["time", "Journée"], ["time-stats", "Statistiques"]] };
 const TAB_ROUTES = ["home", "videos", "calendar", "todo"];
 const MORE_ICON = '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>';
 const PROJECT_COLORS = ["#12d6c5", "#ff3d7f", "#8257ff", "#f5a524", "#3ecf6e", "#4d8dff", "#ff7a30", "#c084fc"];
@@ -47,6 +49,7 @@ const state = {
   reviewVideo: null,
   reviewSrc: null,
   reviewName: "",
+  reviewLoading: null,
   drag: null,
   loadedAt: 0,
 };
@@ -181,6 +184,7 @@ function crumb() {
   const parent = route[3] ? ROUTES.find(([key]) => key === route[3]) : null;
   const parts = parent ? [parent[1], route[1]] : [route[1]];
   if (state.route === "time") parts.push("Journée");
+  if (state.route === "montage") parts.push("Retours");
   if (state.route === "videos") parts.push(state.videoView === "board" ? "Kanban" : "Liste");
   if (state.route === "calendar") parts.push({ day: "Jour", week: "Semaine", month: "Mois" }[state.calMode]);
   return parts.map((p, i) => `<span class="${i === parts.length - 1 ? "here" : ""}">${esc(p)}</span>`).join('<span class="sep">›</span>');
@@ -217,9 +221,10 @@ function render() {
   renderNav();
   const renderers = {
     home: renderHome, videos: renderVideos, calendar: renderCalendar, ideas: renderIdeas, todo: renderTodo,
-    montage: renderMontage, thumbs: renderThumbs, time: renderTime, "time-stats": renderTimeStats, notes: renderNotes,
+    montage: renderMontage, editor: editor.html, thumbs: renderThumbs, time: renderTime, "time-stats": renderTimeStats, notes: renderNotes,
   };
   if (state.route !== "montage") releaseReview();
+  if (state.route !== "editor") editor.leave();
   view.innerHTML = renderers[state.route]();
   afterRender();
 }
@@ -949,12 +954,26 @@ function renderMontage() {
   }
   const video = find("videos", state.reviewVideo);
   if (!state.reviewSrc && isDirectVideo(safeUrl(video.file_url))) state.reviewSrc = safeUrl(video.file_url);
+  if (!state.reviewSrc && video.media_path && store.isCloud && state.reviewLoading !== video.id) {
+    state.reviewLoading = video.id;
+    store
+      .mediaUrl(video.media_path)
+      .then((url) => {
+        if (state.route !== "montage" || state.reviewVideo !== video.id || state.reviewSrc) return;
+        state.reviewSrc = url;
+        state.reviewName = "Montage en ligne";
+        view.innerHTML = renderMontage();
+        afterRender();
+      })
+      .catch((err) => console.warn("Montage en ligne illisible", err))
+      .finally(() => (state.reviewLoading = null));
+  }
   const fileLink = safeUrl(video.file_url);
 
   const stage = state.reviewSrc
     ? `<video id="review-player" src="${esc(state.reviewSrc)}" controls playsinline preload="metadata"></video>
        <div class="marks" id="review-marks"></div>`
-    : `<div class="stage-empty"><p>Choisis le fichier du montage sur cet appareil pour le commenter.</p>
+    : `<div class="stage-empty"><p>${video.media_path && store.isCloud ? "Chargement du montage en ligne…" : "Choisis le fichier du montage sur cet appareil pour le commenter, ou envoie un export depuis le Monteur."}</p>
         <p class="muted small">Le fichier reste sur ton appareil : seuls les commentaires sont enregistrés.</p>
         ${fileLink ? `<p class="small"><a href="${esc(fileLink)}" target="_blank" rel="noopener noreferrer">Ouvrir le lien de la fiche</a></p>` : ""}</div>`;
 
@@ -990,6 +1009,19 @@ function afterRender() {
       const active = running();
       if (el && active) el.textContent = clock((Date.now() - new Date(active.started_at)) / 1000);
     }, 1000);
+  }
+  if (state.route === "editor") {
+    editor.mount(view, {
+      store,
+      toast,
+      esc,
+      videos: () => state.db.videos,
+      async onUpload(video, blob) {
+        const path = await store.uploadMedia(video.id, blob, video.media_path);
+        const saved = await store.update("videos", video.id, { media_path: path });
+        Object.assign(video, saved);
+      },
+    });
   }
   if (state.route === "montage") {
     const player = $("#review-player");
@@ -1130,6 +1162,7 @@ function videoForm(video, defaults = {}) {
     onDelete: video
       ? async () => {
           const ok = await run(async () => {
+            if (video.media_path) await store.removeMedia(video.media_path).catch(() => {});
             await store.remove("videos", video.id);
             return true;
           }, "Vidéo supprimée");
@@ -1420,7 +1453,7 @@ const actions = {
     modal.innerHTML = `<form method="dialog"><div class="modal-head"><h2>Modules</h2>
       <button type="submit" class="icon-btn" aria-label="Fermer">✕</button></div>
       <div class="nav more-nav">${ROUTES.filter(([key]) => !TAB_ROUTES.includes(key))
-        .map(([key, label, paths, parent]) => `<button type="submit" data-action="go" data-route="${key}">${paths ? icon(paths) : '<span style="width:16px"></span>'}<span>${parent ? "TimeTrackr, " : ""}${label}</span></button>`)
+        .map(([key, label, paths, parent]) => `<button type="submit" data-action="go" data-route="${key}">${paths ? icon(paths) : '<span style="width:16px"></span>'}<span>${parent ? ROUTES.find((r) => r[0] === parent)[1] + ", " : ""}${label}${SUBS[key] ? ", " + SUBS[key][0][1] : ""}</span></button>`)
         .join("")}</div>
       <p class="muted small">${esc(state.user?.email || "")}</p>
       ${store.isCloud ? '<button type="submit" class="btn" data-action="sign-out">Se déconnecter</button>' : ""}</form>`;
