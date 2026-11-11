@@ -1,6 +1,7 @@
 import { APP_NAME } from "./config.js";
 import * as store from "./store.js";
 import * as twitch from "./twitch.js";
+import * as youtube from "./youtube.js";
 
 /* ---------- Références ---------- */
 
@@ -42,6 +43,7 @@ const state = {
   account: null,
   live: {},
   reconnect: {},
+  notFound: {},
   syncing: false,
   calMode: window.matchMedia("(max-width: 820px)").matches ? "week" : "month",
   calCursor: new Date(),
@@ -1096,44 +1098,70 @@ function afterRender() {
 
 function connectionTag(a) {
   if (state.reconnect[a.id]) return '<span class="tag sponsor">À reconnecter</span>';
-  if (a.access_token) return `<span class="tag ok">Connecté${a.synced_at ? `, à jour à ${esc(fmt.time.format(new Date(a.synced_at)))}` : ""}</span>`;
+  if (state.notFound[a.id]) return '<span class="tag sponsor">Chaîne introuvable : vérifie le @</span>';
+  const since = a.synced_at ? `, à jour à ${esc(fmt.time.format(new Date(a.synced_at)))}` : "";
+  if (a.access_token) return `<span class="tag ok">Connecté${since}</span>`;
+  if (a.platform === "youtube" && a.external_id && youtube.enabled) return `<span class="tag ok">Automatique${since}</span>`;
   return "";
 }
 
 // Récupère les chiffres des comptes connectés et les enregistre comme relevé du jour.
+async function saveFollowers(account, followers) {
+  const latest = figureFor(account.id)?.latest;
+  const row = await store.saveMetric({
+    account_id: account.id,
+    platform: account.platform,
+    recorded_on: todayKey(),
+    followers,
+    views: latest?.views ?? 0,
+  });
+  state.db.metrics = state.db.metrics.filter((m) => !(m.account_id === account.id && m.recorded_on === row.recorded_on));
+  state.db.metrics.push(row);
+}
+
 async function syncConnected({ quiet = true } = {}) {
   if (state.syncing) return;
-  const list = state.db.accounts.filter((a) => a.platform === "twitch" && a.access_token && a.external_id);
-  if (!list.length) return;
+  const twitchList = twitch.enabled ? state.db.accounts.filter((a) => a.platform === "twitch" && a.access_token && a.external_id) : [];
+  const youtubeList = youtube.enabled ? state.db.accounts.filter((a) => a.platform === "youtube" && (a.external_id || a.handle)) : [];
+  if (!twitchList.length && !youtubeList.length) return;
   state.syncing = true;
   let changed = false;
+  const report = (label, err) => {
+    console.warn(`Actualisation ${label} impossible`, err);
+    if (!quiet) toast(`Actualisation ${label} impossible : ${err.message}.`, true);
+  };
   try {
-    for (const account of list) {
+    for (const account of twitchList) {
       try {
         const check = await twitch.validate(account.access_token);
         const stats = await twitch.fetchStats(account.access_token, account.external_id);
         state.live[account.id] = stats.live;
         delete state.reconnect[account.id];
-        const latest = figureFor(account.id)?.latest;
-        const row = await store.saveMetric({
-          account_id: account.id,
-          platform: "twitch",
-          recorded_on: todayKey(),
-          followers: stats.followers,
-          views: latest?.views ?? 0,
-        });
-        state.db.metrics = state.db.metrics.filter((m) => !(m.account_id === account.id && m.recorded_on === row.recorded_on));
-        state.db.metrics.push(row);
+        await saveFollowers(account, stats.followers);
         Object.assign(account, await store.update("accounts", account.id, { synced_at: new Date().toISOString(), token_expires_at: check.expiresAt }));
         changed = true;
       } catch (err) {
         if (err instanceof twitch.TwitchExpired) {
           state.reconnect[account.id] = true;
           changed = true;
-        } else {
-          console.warn("Actualisation Twitch impossible", err);
-          if (!quiet) toast(`Actualisation Twitch impossible : ${err.message}.`, true);
-        }
+        } else report("Twitch", err);
+      }
+    }
+    for (const account of youtubeList) {
+      try {
+        const channel = await youtube.fetchChannel({ id: account.external_id, handle: account.handle });
+        delete state.notFound[account.id];
+        if (channel.subscribers !== null) await saveFollowers(account, channel.subscribers);
+        const patch = { synced_at: new Date().toISOString() };
+        if (account.external_id !== channel.id) patch.external_id = channel.id;
+        if (channel.avatar && account.avatar_url !== channel.avatar) patch.avatar_url = channel.avatar;
+        Object.assign(account, await store.update("accounts", account.id, patch));
+        changed = true;
+      } catch (err) {
+        if (err instanceof youtube.ChannelNotFound) {
+          state.notFound[account.id] = true;
+          changed = true;
+        } else report("YouTube", err);
       }
     }
   } finally {
@@ -1205,6 +1233,7 @@ function renderAccounts() {
                 .join("")}</ul>`
             : `<p class="muted small">Aucun compte ${esc(label)}.</p>`
         }
+        ${key === "youtube" && youtube.enabled ? '<p class="muted small">Le @ de chaque chaîne suffit : abonnés et photo se mettent à jour tout seuls.</p>' : ""}
       </section>`;
     })
     .join("");
@@ -1224,6 +1253,7 @@ function accountForm(account, defaults = {}) {
       )}
       ${field("Nom affiché", `<input type="text" name="name" value="${esc(a.name)}" maxlength="60" placeholder="Ma chaîne principale" required>`)}
       ${field("Identifiant", `<input type="text" name="handle" value="${esc(a.handle)}" maxlength="80" placeholder="@moncompte">`)}
+      ${youtube.enabled ? '<p class="muted small">Pour YouTube, mets le @ exact de la chaîne : les abonnés se mettent alors à jour tout seuls.</p>' : ""}
       ${account?.access_token ? `<p class="small">Connecté à ${esc(PLATFORMS[account.platform])} : les abonnés se mettent à jour tout seuls. <button type="button" class="btn small" data-action="twitch-disconnect" data-id="${esc(account.id)}">Déconnecter</button></p>` : ""}
       ${account ? '<p class="muted small">Supprimer le compte efface aussi ses relevés de chiffres. Les vidéos sont gardées.</p>' : ""}`,
     async onSubmit(data) {
@@ -1231,6 +1261,12 @@ function accountForm(account, defaults = {}) {
       const row = { platform: platform in PLATFORMS ? platform : "youtube", name: text(data, "name"), handle: text(data, "handle") };
       if (!row.name) return "Donne un nom au compte.";
       if (!account) row.position = state.db.accounts.filter((x) => x.platform === row.platform).length;
+      if (account && account.platform === "youtube" && (row.platform !== "youtube" || row.handle !== account.handle)) {
+        row.external_id = null;
+        row.avatar_url = null;
+        delete state.notFound[account.id];
+      }
+      if (row.platform === "youtube" && youtube.enabled) setTimeout(() => syncConnected({ quiet: false }), 0);
       const saved = await run(() => (account ? store.update("accounts", account.id, row) : store.insert("accounts", row)), "Compte enregistré");
       if (!saved) return "L'enregistrement a échoué.";
       if (!account) {

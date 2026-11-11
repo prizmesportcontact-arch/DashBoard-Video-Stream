@@ -10,3 +10,6 @@ export const APP_NAME = "Régie";
 // Connexion Twitch : identifiant public de l'application déclarée sur dev.twitch.tv (pas de secret).
 export const TWITCH_CLIENT_ID = "t7ijeiej96btnz157m4fnm945ex24z";
 export const TWITCH_REDIRECT = "https://prizmesportcontact-arch.github.io/DashBoard-Video-Stream/";
+
+// Chiffres YouTube : clé publique, acceptée uniquement depuis l'adresse de Régie et pour l'API YouTube.
+export const YOUTUBE_API_KEY = "AIzaSyCPf4OZZc9QYANT7FVcuV-Y8QF_74HX3uQ";
