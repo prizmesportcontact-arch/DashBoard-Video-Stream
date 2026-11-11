@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Dashboard créateur</title>
   <meta name="description" content="Planning, idées et tâches pour mes vidéos et mes streams.">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#0a0a0a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Dashboard">
@@ -14,7 +14,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -48,7 +48,7 @@
         <img src="icons/icon.svg" alt="" width="30" height="30">
         <span id="brand-name">Dashboard créateur</span>
       </div>
-      <nav id="nav" class="nav"></nav>
+      <div><p class="nav-label">Modules</p><nav id="nav" class="nav"></nav></div>
       <div class="soon">
         <p class="soon-title">Prochaines phases</p>
         <ul>
@@ -66,7 +66,8 @@
       <header class="topbar">
         <h1 id="view-title">Accueil</h1>
         <div class="search">
-          <input type="search" id="search" placeholder="Rechercher une vidéo, une idée, une tâche" aria-label="Rechercher" autocomplete="off">
+          <input type="search" id="search" placeholder="Rechercher…" aria-label="Rechercher une vidéo, une idée ou une tâche" autocomplete="off">
+          <kbd>K</kbd>
           <div id="search-results" class="search-results glass" hidden></div>
         </div>
         <button class="btn primary" type="button" data-action="quick-add" id="quick-add">Ajouter</button>

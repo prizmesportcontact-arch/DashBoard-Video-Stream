@@ -14,7 +14,7 @@ const STATUSES = [
 ];
 const STATUS_LABEL = Object.fromEntries(STATUSES);
 const ROUTES = [
-  ["home", "Accueil", '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/>'],
+  ["home", "Tableau de bord", '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/>'],
   ["videos", "Vidéos", '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9.5 5 2.5-5 2.5z"/>'],
   ["calendar", "Calendrier", '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'],
   ["ideas", "Idées", '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.3 1 2.1h5c0-.8.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>'],
@@ -382,7 +382,7 @@ function renderVideos() {
   const toolbar = `<div class="toolbar">
     <div class="segmented" role="group" aria-label="Affichage">
       <button type="button" data-action="video-view" data-view="list" aria-pressed="${state.videoView === "list"}">Liste</button>
-      <button type="button" data-action="video-view" data-view="board" aria-pressed="${state.videoView === "board"}">Colonnes</button>
+      <button type="button" data-action="video-view" data-view="board" aria-pressed="${state.videoView === "board"}">Kanban</button>
       <button type="button" data-action="go" data-route="calendar" aria-pressed="false">Calendrier</button>
     </div>
     ${platformFilter()}
@@ -1105,6 +1105,13 @@ function runSearch() {
   searchResults.hidden = false;
 }
 
+document.addEventListener("keydown", (event) => {
+  const typing = event.target.closest("input, textarea, select");
+  if ((event.key === "k" || event.key === "K") && (event.ctrlKey || event.metaKey || !typing) && !modal.open) {
+    event.preventDefault();
+    searchInput.focus();
+  }
+});
 searchInput.addEventListener("input", runSearch);
 searchInput.addEventListener("focus", runSearch);
 searchInput.addEventListener("keydown", (event) => {
