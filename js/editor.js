@@ -19,6 +19,7 @@ const project = {
   selectedText: null,
   time: 0,
   playing: false,
+  dirty: false,
 };
 let ctx = null; // fourni par l'application : store, toast, esc, videos(), onUploaded()
 let root = null;
@@ -228,6 +229,7 @@ async function importFiles(files) {
     try {
       const source = await addSource(file);
       project.clips.push({ id: uid(), source: source.id, start: 0, end: source.duration, pan: 0.5 });
+      project.dirty = true;
     } catch (err) {
       ctx.toast(`« ${file.name} » : ${err.message}.`, true);
     }
@@ -322,39 +324,91 @@ const ops = {
 
 /* ---------- Export ---------- */
 
+// Où écrire le fichier : dans l'espace disque réservé au site (sans limite de mémoire) quand le
+// navigateur le permet, sinon en mémoire, ce qui convient aux vidéos courtes.
+const TMP_PREFIX = "regie-export-";
+
+async function openDestination() {
+  try {
+    const dir = await navigator.storage?.getDirectory?.();
+    if (dir) {
+      const tmp = `${TMP_PREFIX}${Date.now()}.mp4`;
+      const handle = await dir.getFileHandle(tmp, { create: true });
+      if (typeof handle.createWritable === "function") {
+        return { kind: "browser", handle, dir, tmp, writable: await handle.createWritable() };
+      }
+      await dir.removeEntry(tmp).catch(() => {});
+    }
+  } catch (err) {
+    console.warn("Espace disque du navigateur indisponible, export en mémoire", err);
+  }
+  return { kind: "memory" };
+}
+
+// Supprime les exports temporaires laissés par une session précédente.
+async function cleanLeftovers() {
+  try {
+    const dir = await navigator.storage?.getDirectory?.();
+    if (!dir?.entries) return;
+    for await (const [entry] of dir.entries()) {
+      if (entry.startsWith(TMP_PREFIX) && entry !== result?.dest?.tmp) await dir.removeEntry(entry).catch(() => {});
+    }
+  } catch {
+    /* rien à nettoyer */
+  }
+}
+
+async function cleanBrowserFile() {
+  if (result?.dest?.kind === "browser") await result.dest.dir.removeEntry(result.dest.tmp).catch(() => {});
+}
+
 async function runExport() {
   if (!project.clips.length || exporting) return;
   pause();
   if (typeof VideoEncoder === "undefined") {
     return ctx.toast("Ce navigateur ne sait pas exporter une vidéo. Utilise Chrome ou Edge à jour sur ordinateur.", true);
   }
-  const job = { cancelled: false, output: null, progress: 0, label: "Préparation" };
+  const name = `montage-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.mp4`;
+  const dest = await openDestination();
+
+  const job = { cancelled: false, output: null, progress: 0, label: "Préparation", startedAt: performance.now(), dest };
   exporting = job;
+  if (result) {
+    URL.revokeObjectURL(result.url);
+    await cleanBrowserFile();
+  }
   result = null;
   refresh();
   const inputs = [];
+  let wakeLock = null;
   try {
+    wakeLock = await navigator.wakeLock?.request("screen").catch(() => null);
     const mb = await import("./vendor/mediabunny.min.mjs");
     const [width, height] = size();
+    const duration = total();
+    const totalFrames = Math.max(1, Math.round(duration * FPS));
+    const sampleRate = 48000;
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const g = canvas.getContext("2d", { alpha: false });
 
-    const format = new mb.Mp4OutputFormat({ fastStart: "in-memory" });
-    const output = new mb.Output({ format, target: new mb.BufferTarget() });
+    const streamed = dest.kind !== "memory";
+    // « reserve » garde la lecture rapide (métadonnées au début) sans tout garder en mémoire.
+    const format = new mb.Mp4OutputFormat({ fastStart: streamed ? "reserve" : "in-memory" });
+    const target = streamed ? new mb.StreamTarget(dest.writable, { chunked: true }) : new mb.BufferTarget();
+    const output = new mb.Output({ format, target });
     job.output = output;
 
     const videoCodec = await mb.getFirstEncodableVideoCodec(format.getSupportedVideoCodecs(), { width, height });
     if (!videoCodec) throw new Error("aucun encodeur vidéo disponible dans ce navigateur");
     const videoSource = new mb.CanvasSource(canvas, { codec: videoCodec, bitrate: mb.QUALITY_HIGH, keyFrameInterval: 2 });
-    output.addVideoTrack(videoSource, { frameRate: FPS });
+    output.addVideoTrack(videoSource, { frameRate: FPS, maximumPacketCount: totalFrames + 60 });
 
-    const duration = total();
-    const sampleRate = 48000;
     const audioCodec = await mb.getFirstEncodableAudioCodec(format.getSupportedAudioCodecs(), { numberOfChannels: 2, sampleRate });
     const audioSource = audioCodec ? new mb.AudioBufferSource({ codec: audioCodec, bitrate: mb.QUALITY_HIGH }) : null;
-    if (audioSource) output.addAudioTrack(audioSource);
+    // Au plus un paquet audio toutes les 20 ms, avec de la marge.
+    if (audioSource) output.addAudioTrack(audioSource, { maximumPacketCount: Math.ceil(duration * 50) + 500 });
 
     await output.start();
 
@@ -368,55 +422,78 @@ async function runExport() {
       return opened.get(sourceId);
     };
 
-    // Son : chaque morceau est placé à sa position sur une piste unique, puis encodé d'un bloc.
-    if (audioSource) {
-      job.label = "Préparation du son";
-      refreshProgress();
-      const offline = new OfflineAudioContext(2, Math.max(1, Math.ceil(duration * sampleRate)), sampleRate);
-      let offset = 0;
-      for (const clip of project.clips) {
-        if (job.cancelled) throw new Error("annulé");
-        const track = await open(clip.source).getPrimaryAudioTrack();
-        if (track && (await track.canDecode())) {
-          const sink = new mb.AudioBufferSink(track);
-          for await (const { buffer, timestamp } of sink.buffers(clip.start, clip.end)) {
-            const from = Math.max(0, clip.start - timestamp);
-            const to = Math.min(buffer.duration, clip.end - timestamp);
-            if (to - from <= 0) continue;
-            const node = offline.createBufferSource();
-            node.buffer = buffer;
-            node.connect(offline.destination);
-            node.start(Math.max(0, offset + timestamp + from - clip.start), from, to - from);
-          }
-        }
-        offset += clipLen(clip);
-      }
-      await audioSource.add(await offline.startRendering());
-    }
-
-    job.label = "Export des images";
-    const totalFrames = Math.max(1, Math.round(duration * FPS));
+    // Le montage est traité par fenêtres de 2 secondes : un bout de son, puis les images
+    // correspondantes. La mémoire utilisée reste la même quelle que soit la durée de la vidéo.
+    const WINDOW = 2 * sampleRate;
+    job.label = "Export";
     let frame = 0;
     let offset = 0;
     for (const clip of project.clips) {
-      const track = await open(clip.source).getPrimaryVideoTrack();
-      if (!track || !(await track.canDecode())) throw new Error(`« ${project.sources.get(clip.source).name} » ne peut pas être décodée par ce navigateur`);
-      const sink = new mb.CanvasSink(track, { poolSize: 2 });
+      const input = open(clip.source);
+      const videoTrack = await input.getPrimaryVideoTrack();
+      if (!videoTrack || !(await videoTrack.canDecode())) {
+        throw new Error(`« ${project.sources.get(clip.source).name} » ne peut pas être décodée par ce navigateur`);
+      }
+      const audioTrack = audioSource ? await input.getPrimaryAudioTrack() : null;
+      const audioSink = audioTrack && (await audioTrack.canDecode()) ? new mb.AudioBufferSink(audioTrack) : null;
+
+      const videoSink = new mb.CanvasSink(videoTrack, { poolSize: 2 });
       const last = Math.min(totalFrames, Math.round((offset + clipLen(clip)) * FPS));
       const first = frame;
+      const clipOffset = offset;
       const stamps = (function* () {
-        for (let i = first; i < last; i++) yield Math.min(clip.end - 0.001, clip.start + (i / FPS - offset));
+        for (let i = first; i < last; i++) yield Math.min(clip.end - 0.001, clip.start + (i / FPS - clipOffset));
       })();
-      for await (const wrapped of sink.canvasesAtTimestamps(stamps)) {
-        if (job.cancelled) throw new Error("annulé");
-        const t = frame / FPS;
-        drawFrame(g, width, height, wrapped?.canvas, wrapped?.canvas.width, wrapped?.canvas.height, clip, t);
-        await videoSource.add(t, 1 / FPS);
-        frame += 1;
-        if (frame % 5 === 0) {
-          job.progress = frame / totalFrames;
-          refreshProgress();
+      const frames = videoSink.canvasesAtTimestamps(stamps);
+
+      const pushFrames = async (until) => {
+        while (frame < last && frame / FPS < until) {
+          if (job.cancelled) throw new Error("annulé");
+          const next = await frames.next();
+          if (next.done) {
+            frame = last;
+            return;
+          }
+          const wrapped = next.value;
+          const t = frame / FPS;
+          drawFrame(g, width, height, wrapped?.canvas, wrapped?.canvas.width, wrapped?.canvas.height, clip, t);
+          await videoSource.add(t, 1 / FPS);
+          frame += 1;
+          if (frame % 10 === 0) {
+            job.progress = frame / totalFrames;
+            refreshProgress();
+          }
         }
+      };
+
+      const clipSamples = Math.max(0, Math.round(clipLen(clip) * sampleRate));
+      try {
+        for (let done = 0; done < clipSamples || (done === 0 && !audioSource); done += WINDOW) {
+          if (job.cancelled) throw new Error("annulé");
+          const n = Math.min(WINDOW, clipSamples - done);
+          if (audioSource && n > 0) {
+            const winStart = clip.start + done / sampleRate;
+            const winEnd = winStart + n / sampleRate;
+            const mix = new OfflineAudioContext(2, n, sampleRate);
+            if (audioSink) {
+              for await (const { buffer, timestamp } of audioSink.buffers(winStart, winEnd)) {
+                const from = Math.max(0, winStart - timestamp);
+                const to = Math.min(buffer.duration, winEnd - timestamp);
+                if (to - from <= 0) continue;
+                const node = mix.createBufferSource();
+                node.buffer = buffer;
+                node.connect(mix.destination);
+                node.start(Math.max(0, timestamp + from - winStart), from, to - from);
+              }
+            }
+            await audioSource.add(await mix.startRendering());
+          }
+          if (!audioSource) break;
+          await pushFrames(clipOffset + (done + n) / sampleRate);
+        }
+        await pushFrames(Infinity);
+      } finally {
+        await frames.return?.();
       }
       offset += clipLen(clip);
     }
@@ -425,26 +502,51 @@ async function runExport() {
     job.progress = 1;
     refreshProgress();
     await output.finalize();
-    const blob = new Blob([output.target.buffer], { type: "video/mp4" });
-    result = { blob, url: URL.createObjectURL(blob), name: `montage-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.mp4`, width, height, duration, noAudio: !audioSource, audioCodec };
+    if (streamed) await dest.writable.close().catch(() => {});
+
+    const blob = streamed ? await dest.handle.getFile() : new Blob([output.target.buffer], { type: "video/mp4" });
+    result = {
+      blob,
+      url: URL.createObjectURL(blob),
+      name,
+      dest,
+      width,
+      height,
+      duration,
+      noAudio: !audioSource,
+      audioCodec,
+    };
+    project.dirty = false;
   } catch (err) {
-    if (job.output && job.output.state !== "finalized") await job.output.cancel().catch(() => {});
+    if (job.output && !["finalized", "canceled"].includes(job.output.state)) await job.output.cancel().catch(() => {});
+    if (dest.writable) await dest.writable.abort().catch(() => {});
+    if (dest.kind === "browser") await dest.dir.removeEntry(dest.tmp).catch(() => {});
     if (!job.cancelled) {
       console.error(err);
       ctx.toast(`Export impossible : ${err.message}.`, true);
     }
   } finally {
     inputs.forEach((input) => input.dispose());
+    wakeLock?.release().catch(() => {});
     exporting = null;
     refresh();
   }
+}
+
+function progressText(job) {
+  const pct = Math.round(job.progress * 100);
+  const elapsed = (performance.now() - job.startedAt) / 1000;
+  if (job.progress < 0.03 || job.progress >= 1 || elapsed < 3) return `${job.label}, ${pct} %`;
+  const left = Math.round((elapsed / job.progress) * (1 - job.progress));
+  const when = left >= 60 ? `${Math.floor(left / 60)} min ${pad(left % 60)}` : `${left} s`;
+  return `${job.label}, ${pct} %, encore environ ${when}`;
 }
 
 function refreshProgress() {
   const bar = root?.querySelector("#ed-progress");
   const label = root?.querySelector("#ed-progress-label");
   if (bar && exporting) bar.style.width = `${(exporting.progress * 100).toFixed(1)}%`;
-  if (label && exporting) label.textContent = `${exporting.label}, ${Math.round(exporting.progress * 100)} %`;
+  if (label && exporting) label.textContent = progressText(exporting);
 }
 
 async function upload() {
@@ -507,8 +609,8 @@ function sidePanel() {
   if (exporting) {
     exportBox = `<section class="ed-box"><h3>Export en cours</h3>
       <div class="bar"><i id="ed-progress" style="width:${(exporting.progress * 100).toFixed(1)}%"></i></div>
-      <p class="muted small" id="ed-progress-label">${esc(exporting.label)}</p>
-      <p class="muted small">Garde cet onglet au premier plan jusqu'à la fin.</p>
+      <p class="muted small" id="ed-progress-label">${esc(progressText(exporting))}</p>
+      <p class="muted small">Garde cet onglet au premier plan jusqu'à la fin.${exporting.dest?.kind === "memory" && total() > 600 ? " Ce navigateur exporte en mémoire : une vidéo aussi longue peut échouer. Chrome ou Edge à jour écrivent directement sur le disque." : ""}</p>
       <button type="button" class="btn small" data-ed="cancel">Annuler</button></section>`;
   } else if (result) {
     const videos = ctx.videos().filter((v) => v.kind !== "stream");
@@ -559,6 +661,7 @@ function refresh() {
   }
   canvas.style.aspectRatio = `${w} / ${h}`;
   root.querySelector('[data-ed="export"]').disabled = empty || Boolean(exporting);
+  root.querySelector("#ed-dirty").hidden = !(project.dirty && !empty);
   paint();
 }
 
@@ -575,11 +678,12 @@ export function html() {
       <select data-ed-input="height" aria-label="Qualité" style="width:auto">
         ${option(1080, "1080p", project.height)}${option(720, "720p, plus rapide", project.height)}</select>
       <span class="spacer"></span>
+      <span class="tag sponsor" id="ed-dirty" hidden>Non exporté</span>
       <button type="button" class="btn small primary" data-ed="export">Exporter en MP4</button>
     </div>
     <div class="panel glass" id="ed-empty">
       <div class="empty"><p>Importe une ou plusieurs vidéos depuis ton appareil pour commencer le montage.</p>
-      <p class="muted small">Les fichiers restent sur ton appareil. Le projet n'est pas sauvegardé : exporte avant de fermer la page.</p></div>
+      <p class="muted small">Les fichiers restent sur ton appareil. Le projet n'est pas sauvegardé : exporte avant de fermer la page, le navigateur te préviendra sinon.</p></div>
     </div>
     <div id="ed-work" hidden>
       <div class="ed-main">
@@ -603,11 +707,15 @@ export function mount(view, context) {
   root = view.querySelector("#editor");
   if (!root) return;
   if (!vault) {
+    cleanLeftovers();
     vault = document.createElement("div");
     vault.hidden = true;
     document.body.appendChild(vault);
+    // Mise en garde du navigateur si l'on ferme ou recharge la page avec un montage non exporté.
     window.addEventListener("beforeunload", (event) => {
-      if (project.clips.length) event.preventDefault();
+      if (!exporting && !(project.dirty && project.clips.length)) return;
+      event.preventDefault();
+      event.returnValue = "";
     });
   }
 
@@ -625,6 +733,7 @@ export function mount(view, context) {
     if (action && ops[action]) {
       pause();
       ops[action]();
+      project.dirty = true;
       refresh();
       seek(Math.min(project.time, total()));
       return;
@@ -652,6 +761,7 @@ export function mount(view, context) {
     if (key === "pan" && clip) clip.pan = Number(event.target.value);
     else if (key === "text" && item) item.text = event.target.value;
     else return;
+    markDirty();
     paint();
     if (key === "text") {
       const block = root.querySelector(`[data-text="${item.id}"]`);
@@ -673,6 +783,7 @@ export function mount(view, context) {
     else if (item && ["pos", "size", "color"].includes(key)) item[key] = event.target.value;
     else if (item && key === "box") item.box = event.target.checked;
     else return;
+    if (key !== "height" && project.clips.length) project.dirty = true;
     refresh();
   });
 
@@ -700,6 +811,7 @@ export function mount(view, context) {
     const to = project.clips.findIndex((c) => c.id === target.dataset.clip);
     const box = target.getBoundingClientRect();
     project.clips.splice(event.clientX > box.left + box.width / 2 ? to + 1 : to, 0, moved);
+    project.dirty = true;
     dragged = null;
     refresh();
     seek(Math.min(project.time, total()));
@@ -710,10 +822,20 @@ export function mount(view, context) {
   if (project.clips.length) seek(project.time);
 }
 
+function markDirty() {
+  project.dirty = true;
+  const flag = root?.querySelector("#ed-dirty");
+  if (flag) flag.hidden = false;
+}
+
 export function leave() {
-  if (root) pause();
+  if (root) {
+    pause();
+    if (exporting) ctx.toast("L'export continue. Reviens dans Monteur pour récupérer le fichier.");
+    else if (project.dirty && project.clips.length) ctx.toast("Montage gardé tant que la page reste ouverte. Pense à l'exporter.");
+  }
   root = null;
 }
 
 // Pour les tests automatiques.
-export const debug = { project, total, getResult: () => result, isExporting: () => Boolean(exporting) };
+export const debug = { project, total, getResult: () => result, isExporting: () => Boolean(exporting), progress: () => exporting?.progress ?? null };
