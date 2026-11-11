@@ -1,4 +1,4 @@
--- Dashboard créateur — base de données (phase 1)
+-- Dashboard créateur — base de données
 -- À exécuter une seule fois dans l'éditeur SQL du projet Supabase.
 -- Chaque ligne appartient à l'utilisateur connecté ; personne d'autre ne peut la lire.
 
@@ -68,12 +68,50 @@ create table if not exists public.metrics (
   unique (user_id, platform, recorded_on)
 );
 
+create table if not exists public.notes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  title text not null,
+  body text,
+  pinned boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.time_entries (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  label text,
+  video_id uuid references public.videos (id) on delete set null,
+  started_at timestamptz not null default now(),
+  ended_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (ended_at is null or ended_at > started_at)
+);
+
+create table if not exists public.review_comments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  video_id uuid not null references public.videos (id) on delete cascade,
+  at_seconds numeric not null default 0 check (at_seconds >= 0),
+  body text not null,
+  resolved boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists videos_user_planned_idx on public.videos (user_id, planned_at);
 create index if not exists ideas_user_idx on public.ideas (user_id, created_at desc);
 create index if not exists tasks_user_due_idx on public.tasks (user_id, due_on);
 create index if not exists tasks_video_idx on public.tasks (video_id);
 create index if not exists goals_user_idx on public.goals (user_id);
 create index if not exists metrics_user_idx on public.metrics (user_id, platform, recorded_on desc);
+create index if not exists notes_user_idx on public.notes (user_id, updated_at desc);
+create index if not exists time_entries_user_idx on public.time_entries (user_id, started_at desc);
+create index if not exists time_entries_video_idx on public.time_entries (video_id);
+create index if not exists review_comments_video_idx on public.review_comments (video_id, at_seconds);
+create index if not exists review_comments_user_idx on public.review_comments (user_id);
 
 create or replace function public.touch_updated_at()
 returns trigger
@@ -90,7 +128,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['videos', 'ideas', 'tasks', 'goals', 'metrics'] loop
+  foreach t in array array['videos', 'ideas', 'tasks', 'goals', 'metrics', 'notes', 'time_entries', 'review_comments'] loop
     execute format('alter table public.%I enable row level security', t);
 
     execute format('drop policy if exists "%s_owner_select" on public.%I', t, t);

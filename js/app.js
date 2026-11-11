@@ -16,14 +16,23 @@ const STATUS_LABEL = Object.fromEntries(STATUSES);
 const ROUTES = [
   ["home", "Tableau de bord", '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/>'],
   ["videos", "Vidéos", '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9.5 5 2.5-5 2.5z"/>'],
-  ["calendar", "Calendrier", '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'],
-  ["ideas", "Idées", '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.3 1 2.1h5c0-.8.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>'],
+  ["montage", "Montage", '<path d="M4 4v16M20 4v16M4 8h16M4 16h16M9 4v4M15 4v4M9 16v4M15 16v4"/>'],
   ["todo", "Todo", '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12.5 2.5 2.5 4.5-5.5"/>'],
+  ["calendar", "Calendrier", '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'],
+  ["thumbs", "Miniatures", '<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="8.5" cy="10" r="1.5"/><path d="m4 17 5-4 4 3 3-2 4 3"/>'],
+  ["time", "TimeTrackr", '<circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2M9.5 3h5"/>'],
+  ["time-stats", "Statistiques", "", "time"],
+  ["notes", "Notes", '<path d="M6 3.5h9l4 4V20a.5.5 0 0 1-.5.5h-12A.5.5 0 0 1 6 20z"/><path d="M9 12h6M9 16h4"/>'],
+  ["ideas", "Idées", '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.3 1 2.1h5c0-.8.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>'],
 ];
-const HOME_BLOCKS = ["week", "figures", "today", "upcoming", "goals", "recent"];
+const SUBS = { time: [["time", "Journée"], ["time-stats", "Statistiques"]] };
+const TAB_ROUTES = ["home", "videos", "calendar", "todo"];
+const MORE_ICON = '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>';
+const PROJECT_COLORS = ["#12d6c5", "#ff3d7f", "#8257ff", "#f5a524", "#3ecf6e", "#4d8dff", "#ff7a30", "#c084fc"];
+const HOME_BLOCKS = ["week", "figures", "today", "upcoming", "goals", "recent", "thumbs"];
 
 const state = {
-  db: { videos: [], ideas: [], tasks: [], goals: [], metrics: [] },
+  db: { videos: [], ideas: [], tasks: [], goals: [], metrics: [], notes: [], time_entries: [], review_comments: [] },
   user: null,
   route: "home",
   videoView: "list",
@@ -32,6 +41,12 @@ const state = {
   calCursor: new Date(),
   tag: null,
   showDone: false,
+  calShow: { video: true, stream: true, task: true },
+  navOpen: {},
+  timeDay: new Date(),
+  reviewVideo: null,
+  reviewSrc: null,
+  reviewName: "",
   drag: null,
   loadedAt: 0,
 };
@@ -126,9 +141,31 @@ function pill(v, draggable = false) {
   // Un <div> quand l'élément se déplace : Firefox ne laisse pas glisser un <button>.
   const tag = draggable ? "div" : "button";
   const attrs = draggable ? 'role="button" tabindex="0" draggable="true" data-drag="video-date"' : 'type="button"';
+  const sponsor = v.sponsor ? `<span class="pill-sub"><span class="tag sponsor">${esc(v.sponsor)}</span></span>` : "";
   return `<${tag} ${attrs} class="pill ${firstPlatform(v)} ${v.status === "publie" ? "is-done" : ""}"
-    data-action="edit-video" data-id="${esc(v.id)}" title="${esc(v.title)}">${time}${esc(v.title)}</${tag}>`;
+    data-action="edit-video" data-id="${esc(v.id)}" title="${esc(v.title)}"><span class="pill-line">${time}${esc(v.title)}</span>${sponsor}</${tag}>`;
 }
+
+function taskPill(t) {
+  return `<div role="button" tabindex="0" draggable="true" data-drag="task-date" class="pill task-pill ${t.done ? "is-done" : ""}"
+    data-action="edit-task" data-id="${esc(t.id)}" title="${esc(t.title)}"><span class="pill-line">${esc(t.title)}</span></div>`;
+}
+
+const projectColor = (id) => {
+  if (!id) return "#6f6f6f";
+  let h = 0;
+  for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return PROJECT_COLORS[h % PROJECT_COLORS.length];
+};
+const duration = (ms) => {
+  const min = Math.max(0, Math.round(ms / 60000));
+  return min >= 60 ? `${Math.floor(min / 60)} h ${pad(min % 60)}` : `${min} min`;
+};
+const clock = (seconds) => {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  return `${h ? h + ":" : ""}${h ? pad(Math.floor((s % 3600) / 60)) : Math.floor(s / 60)}:${pad(s % 60)}`;
+};
 
 const emptyState = (text, action, label) =>
   `<div class="empty"><p>${esc(text)}</p>${
@@ -139,25 +176,52 @@ const lateTasks = () => state.db.tasks.filter((t) => !t.done && t.due_on && t.du
 
 /* ---------- Navigation ---------- */
 
+function crumb() {
+  const route = ROUTES.find(([key]) => key === state.route);
+  const parent = route[3] ? ROUTES.find(([key]) => key === route[3]) : null;
+  const parts = parent ? [parent[1], route[1]] : [route[1]];
+  if (state.route === "time") parts.push("Journée");
+  if (state.route === "videos") parts.push(state.videoView === "board" ? "Kanban" : "Liste");
+  if (state.route === "calendar") parts.push({ day: "Jour", week: "Semaine", month: "Mois" }[state.calMode]);
+  return parts.map((p, i) => `<span class="${i === parts.length - 1 ? "here" : ""}">${esc(p)}</span>`).join('<span class="sep">›</span>');
+}
+
 function renderNav() {
   const late = lateTasks().length;
-  const html = ROUTES.map(([key, label, paths]) => {
-    const badge = key === "todo" && late ? `<span class="count" aria-label="${late} en retard">${late}</span>` : "";
-    return `<button type="button" data-action="go" data-route="${key}" ${
-      state.route === key ? 'aria-current="page"' : ""
-    }>${icon(paths)}<span>${label}</span>${badge}</button>`;
-  }).join("");
-  $("#nav").innerHTML = html;
-  $("#tabbar").innerHTML = html;
-  $("#view-title").textContent = ROUTES.find(([key]) => key === state.route)[1];
-  const addLabel = { ideas: "Nouvelle idée", todo: "Nouvelle tâche" }[state.route] || "Nouvelle vidéo";
+  const badge = (key) => (key === "todo" && late ? `<span class="count" aria-label="${late} en retard">${late}</span>` : "");
+  const current = (key) => (state.route === key ? 'aria-current="page"' : "");
+  const side = ROUTES.filter((r) => !r[3])
+    .map(([key, label, paths]) => {
+      const subs = SUBS[key];
+      if (!subs) {
+        return `<button type="button" data-action="go" data-route="${key}" ${current(key)}>${icon(paths)}<span>${label}</span>${badge(key)}</button>`;
+      }
+      const open = state.navOpen[key] || subs.some(([k]) => k === state.route);
+      return `<button type="button" data-action="toggle-nav" data-key="${key}" aria-expanded="${open}">${icon(paths)}<span>${label}</span><span class="chev">${open ? "⌄" : "›"}</span></button>
+        ${open ? `<div class="subnav">${subs.map(([k, l]) => `<button type="button" data-action="go" data-route="${k}" ${current(k)}><span>${l}</span></button>`).join("")}</div>` : ""}`;
+    })
+    .join("");
+  $("#nav").innerHTML = side;
+  const inTabs = TAB_ROUTES.includes(state.route);
+  $("#tabbar").innerHTML =
+    ROUTES.filter(([key]) => TAB_ROUTES.includes(key))
+      .map(([key, label, paths]) => `<button type="button" data-action="go" data-route="${key}" ${current(key)}>${icon(paths)}<span>${key === "home" ? "Accueil" : label}</span>${badge(key)}</button>`)
+      .join("") +
+    `<button type="button" data-action="more" ${inTabs ? "" : 'aria-current="page"'}>${icon(MORE_ICON)}<span>Plus</span></button>`;
+  $("#view-title").innerHTML = crumb();
+  const addLabel = { ideas: "Nouvelle idée", todo: "Nouvelle tâche", notes: "Nouvelle note" }[state.route] || "Nouvelle vidéo";
   $("#quick-add").textContent = addLabel;
 }
 
 function render() {
   renderNav();
-  const renderers = { home: renderHome, videos: renderVideos, calendar: renderCalendar, ideas: renderIdeas, todo: renderTodo };
+  const renderers = {
+    home: renderHome, videos: renderVideos, calendar: renderCalendar, ideas: renderIdeas, todo: renderTodo,
+    montage: renderMontage, thumbs: renderThumbs, time: renderTime, "time-stats": renderTimeStats, notes: renderNotes,
+  };
+  if (state.route !== "montage") releaseReview();
   view.innerHTML = renderers[state.route]();
+  afterRender();
 }
 
 function go(route) {
@@ -310,6 +374,19 @@ const homeBlocks = {
     });
   },
 
+  thumbs() {
+    const items = state.db.videos
+      .filter((v) => safeUrl(v.thumb_url))
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .slice(0, 4);
+    const body = items.length
+      ? `<div class="thumb-grid small-grid">${items.map(thumbCard).join("")}</div>`
+      : emptyState("Ajoute le lien d'une miniature dans une fiche vidéo pour la voir ici.");
+    return panel("thumbs", "Dernières miniatures travaillées", body, {
+      extra: `<button type="button" class="btn small" data-action="go" data-route="thumbs">Tout voir</button>`,
+    });
+  },
+
   recent() {
     const items = [...state.db.videos].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 5);
     const body = items.length
@@ -441,49 +518,64 @@ function renderVideos() {
 
 function renderCalendar() {
   const cursor = state.calCursor;
-  const isWeek = state.calMode === "week";
-  const first = isWeek ? startOfWeek(cursor) : startOfWeek(new Date(cursor.getFullYear(), cursor.getMonth(), 1));
+  const mode = state.calMode;
   const monthDays = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
   const lead = (new Date(cursor.getFullYear(), cursor.getMonth(), 1).getDay() + 6) % 7;
-  const total = isWeek ? 7 : Math.ceil((lead + monthDays) / 7) * 7;
+  const first =
+    mode === "day" ? new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate())
+    : mode === "week" ? startOfWeek(cursor)
+    : startOfWeek(new Date(cursor.getFullYear(), cursor.getMonth(), 1));
+  const total = mode === "day" ? 1 : mode === "week" ? 7 : Math.ceil((lead + monthDays) / 7) * 7;
   const today = todayKey();
-  const items = filteredVideos();
-  const title = isWeek
-    ? `Semaine du ${fmt.day.format(first)}`
-    : fmt.month.format(cursor);
+  const show = state.calShow;
+  const videos = filteredVideos().filter((v) => (v.kind === "stream" ? show.stream : show.video));
+  const tasks = show.task ? state.db.tasks.filter((t) => t.due_on) : [];
+  const title = mode === "day" ? fmt.long.format(first) : mode === "week" ? `Semaine du ${fmt.day.format(first)}` : fmt.month.format(cursor);
+  const narrow = window.matchMedia("(max-width: 820px)").matches;
 
   const cells = Array.from({ length: total }, (_, i) => {
     const d = addDays(first, i);
     const key = dayKey(d);
-    const out = !isWeek && d.getMonth() !== cursor.getMonth();
-    const dayItems = items.filter((v) => planKey(v) === key).sort((a, b) => a.planned_at.localeCompare(b.planned_at));
+    const out = mode === "month" && d.getMonth() !== cursor.getMonth();
+    const dayVideos = videos.filter((v) => planKey(v) === key).sort((a, b) => a.planned_at.localeCompare(b.planned_at));
+    const dayTasks = tasks.filter((t) => t.due_on === key);
     return `<div class="cell ${out ? "out" : ""} ${key === today ? "today" : ""}" data-drop="date" data-date="${key}">
       <div class="cell-top"><span><span class="cell-num">${d.getDate()}</span> <span class="muted small">${
-        isWeek || window.matchMedia("(max-width: 820px)").matches ? esc(fmt.weekday.format(d)) : ""
-      }</span></span>
-      <button type="button" class="icon-btn cell-add" data-action="new-video" data-date="${key}" aria-label="Ajouter le ${esc(
-        fmt.day.format(d)
-      )}">+</button></div>
-      ${dayItems.map((v) => pill(v, true)).join("")}
+        mode !== "month" || narrow ? esc(fmt.weekday.format(d)) : ""
+      }</span></span></div>
+      ${dayVideos.map((v) => pill(v, true)).join("")}${dayTasks.map(taskPill).join("")}
+      <button type="button" class="cell-add" data-action="new-video" data-date="${key}" aria-label="Ajouter le ${esc(fmt.day.format(d))}">+</button>
     </div>`;
   }).join("");
 
-  const heads = Array.from({ length: 7 }, (_, i) => `<span>${esc(fmt.weekday.format(addDays(first, i)))}</span>`).join("");
+  const heads = mode === "day" ? "" : Array.from({ length: 7 }, (_, i) => `<span>${esc(fmt.weekday.format(addDays(first, i)))}</span>`).join("");
+  const box = (key, label, color) => `<label class="source"><input type="checkbox" class="check small-check" data-action="cal-show" data-key="${key}" ${show[key] ? "checked" : ""}>
+    <i class="dot" style="background:${color}"></i><span>${label}</span></label>`;
 
   return `<div class="toolbar">
-    <button type="button" class="btn small" data-action="cal-move" data-step="-1" aria-label="Période précédente">‹</button>
-    <span class="cal-title">${esc(title)}</span>
-    <button type="button" class="btn small" data-action="cal-move" data-step="1" aria-label="Période suivante">›</button>
-    <button type="button" class="btn small" data-action="cal-today">Aujourd'hui</button>
     <div class="segmented" role="group" aria-label="Période">
-      <button type="button" data-action="cal-mode" data-mode="week" aria-pressed="${isWeek}">Semaine</button>
-      <button type="button" data-action="cal-mode" data-mode="month" aria-pressed="${!isWeek}">Mois</button>
+      ${[["day", "Jour"], ["week", "Semaine"], ["month", "Mois"]]
+        .map(([m, l]) => `<button type="button" data-action="cal-mode" data-mode="${m}" aria-pressed="${mode === m}">${l}</button>`)
+        .join("")}
     </div>
     <span class="spacer"></span>
-    ${platformFilter()}
+    <button type="button" class="btn small" data-action="cal-move" data-step="-1" aria-label="Période précédente">‹</button>
+    <button type="button" class="btn small" data-action="cal-today">Aujourd'hui</button>
+    <button type="button" class="btn small" data-action="cal-move" data-step="1" aria-label="Période suivante">›</button>
+    <span class="cal-title">${esc(title)}</span>
   </div>
-  <div class="cal-head">${heads}</div>
-  <div class="cal ${isWeek ? "week" : ""}">${cells}</div>`;
+  <div class="cal-layout">
+    <aside class="cal-side">
+      <p class="side-title">Afficher</p>
+      ${box("video", "Vidéos", "#ededed")}${box("stream", "Streams", "var(--twitch)")}${box("task", "Tâches", "var(--sponsor)")}
+      <p class="side-title">Plateformes</p>
+      <div class="side-chips">${platformFilter()}</div>
+    </aside>
+    <div class="cal-main">
+      ${heads ? `<div class="cal-head">${heads}</div>` : ""}
+      <div class="cal ${mode}">${cells}</div>
+    </div>
+  </div>`;
 }
 
 /* ---------- Idées ---------- */
@@ -559,6 +651,359 @@ function renderTodo() {
 
   const body = sections || emptyState(done.length ? "Tout est fait." : "Aucune tâche. Ajoute la première dans le champ ci-dessus.");
   return `${quick}<div class="panel glass">${body}${doneSection}</div>`;
+}
+
+/* ---------- Miniatures ---------- */
+
+function thumbCard(v) {
+  const thumb = safeUrl(v.thumb_url);
+  return `<button type="button" class="thumb-card" data-action="edit-video" data-id="${esc(v.id)}">
+    ${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy">` : '<span class="thumb-empty">Sans miniature</span>'}
+    <span class="thumb-title">${esc(v.title)}</span>
+    <span class="row-sub">${platformDots(v.platforms)}<span>${esc(STATUS_LABEL[v.status])}</span></span>
+  </button>`;
+}
+
+function renderThumbs() {
+  const all = filteredVideos().filter((v) => v.kind !== "stream");
+  const withThumb = all.filter((v) => safeUrl(v.thumb_url)).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  const without = all.filter((v) => !safeUrl(v.thumb_url) && v.status !== "publie");
+  if (!all.length) {
+    return `<div class="panel glass">${emptyState("Aucune vidéo pour l'instant. Les miniatures se rattachent aux fiches vidéo.", "new-video", "Créer une vidéo")}</div>`;
+  }
+  return `<div class="toolbar">${platformFilter()}</div>
+    ${withThumb.length ? `<div class="thumb-grid">${withThumb.map(thumbCard).join("")}</div>` : `<div class="panel glass">${emptyState("Aucune miniature. Ouvre une fiche vidéo et colle le lien de l'image.")}</div>`}
+    ${without.length ? `<h2 class="group-title">Miniature à faire</h2><div class="thumb-grid">${without.map(thumbCard).join("")}</div>` : ""}`;
+}
+
+/* ---------- Notes ---------- */
+
+function renderNotes() {
+  const items = [...state.db.notes].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at));
+  if (!items.length) {
+    return `<div class="panel glass">${emptyState("Aucune note. Garde ici tes scripts, tes listes et tes infos utiles.", "new-note", "Écrire une note")}</div>`;
+  }
+  return `<div class="ideas">${items
+    .map(
+      (n) => `<button type="button" class="idea glass note" data-action="edit-note" data-id="${esc(n.id)}">
+        <span class="idea-title">${n.pinned ? "★ " : ""}${esc(n.title)}</span>
+        <span class="note-body">${esc((n.body || "").slice(0, 280))}</span>
+        <span class="muted small">Modifiée le ${esc(fmt.day.format(new Date(n.updated_at)))}</span>
+      </button>`
+    )
+    .join("")}</div>`;
+}
+
+function noteForm(note) {
+  const n = note || {};
+  openForm({
+    title: note ? "Modifier la note" : "Nouvelle note",
+    body: `
+      ${field("Titre", `<input type="text" name="title" value="${esc(n.title)}" maxlength="200" required>`)}
+      ${field("Contenu", `<textarea name="body" maxlength="20000" style="min-height:260px">${esc(n.body)}</textarea>`)}
+      <label class="source"><input type="checkbox" class="check small-check" name="pinned" ${n.pinned ? "checked" : ""}><span>Épingler en haut</span></label>`,
+    async onSubmit(data) {
+      const row = { title: text(data, "title"), body: text(data, "body"), pinned: data.get("pinned") === "on" };
+      if (!row.title) return "Donne un titre à la note.";
+      const saved = await run(() => (note ? store.update("notes", note.id, row) : store.insert("notes", row)), "Note enregistrée");
+      if (!saved) return "L'enregistrement a échoué.";
+      if (note) Object.assign(note, saved);
+      else state.db.notes.push(saved);
+    },
+    onDelete: note
+      ? async () => {
+          const ok = await run(async () => {
+            await store.remove("notes", note.id);
+            return true;
+          }, "Note supprimée");
+          if (ok) state.db.notes = state.db.notes.filter((x) => x.id !== note.id);
+        }
+      : null,
+  });
+}
+
+/* ---------- TimeTrackr ---------- */
+
+const running = () => state.db.time_entries.find((e) => !e.ended_at);
+const entryEnd = (e) => (e.ended_at ? new Date(e.ended_at) : new Date());
+const projectName = (id) => (id ? find("videos", id)?.title || "Vidéo supprimée" : "Sans projet");
+
+// Durée d'une entrée comprise dans un jour donné (une entrée peut passer minuit).
+function overlap(entry, day) {
+  const start = Math.max(new Date(entry.started_at).getTime(), day.getTime());
+  const end = Math.min(entryEnd(entry).getTime(), addDays(day, 1).getTime());
+  return Math.max(0, end - start);
+}
+
+function projectSelect(selected) {
+  const videos = [...state.db.videos].sort((a, b) => a.title.localeCompare(b.title, "fr"));
+  return `<select name="video_id" aria-label="Projet"><option value="">Sans projet</option>${videos
+    .map((v) => `<option value="${esc(v.id)}" ${selected === v.id ? "selected" : ""}>${esc(v.title)}</option>`)
+    .join("")}</select>`;
+}
+
+function totalsByProject(entries, ms) {
+  const totals = new Map();
+  entries.forEach((e) => {
+    const value = ms(e);
+    if (value > 0) totals.set(e.video_id || "", (totals.get(e.video_id || "") || 0) + value);
+  });
+  return [...totals.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function renderTime() {
+  const day = new Date(state.timeDay.getFullYear(), state.timeDay.getMonth(), state.timeDay.getDate());
+  const isToday = dayKey(day) === todayKey();
+  const active = running();
+  const entries = state.db.time_entries
+    .filter((e) => overlap(e, day) > 0 || (e === active && isToday))
+    .sort((a, b) => b.started_at.localeCompare(a.started_at));
+  const total = entries.reduce((sum, e) => sum + overlap(e, day), 0);
+
+  const starter = active
+    ? `<div class="panel glass timer on">
+        <div><p class="muted small">En cours depuis ${esc(fmt.time.format(new Date(active.started_at)))}</p>
+        <p class="timer-label"><i class="dot" style="background:${projectColor(active.video_id)}"></i> ${esc(active.label || projectName(active.video_id))}</p></div>
+        <span class="timer-clock" id="timer-clock">${clock((Date.now() - new Date(active.started_at)) / 1000)}</span>
+        <button type="button" class="btn primary" data-action="time-stop">Arrêter</button>
+      </div>`
+    : `<form class="panel glass timer" data-form="time-start">
+        <input type="text" name="label" placeholder="Sur quoi tu travailles ?" aria-label="Activité" maxlength="200">
+        ${projectSelect("")}
+        <button type="submit" class="btn primary">Démarrer</button>
+      </form>`;
+
+  let timeline = "";
+  if (entries.length) {
+    const starts = entries.map((e) => Math.max(new Date(e.started_at).getTime(), day.getTime()));
+    const ends = entries.map((e) => Math.min(entryEnd(e).getTime(), addDays(day, 1).getTime()));
+    const from = Math.floor(Math.min(...starts) / 3600000) * 3600000;
+    const to = Math.max(from + 3600000, Math.ceil(Math.max(...ends) / 3600000) * 3600000);
+    const span = to - from;
+    const hours = [];
+    const stepHours = Math.max(1, Math.ceil(span / 3600000 / 8));
+    for (let t = from; t <= to; t += stepHours * 3600000) hours.push(t);
+    timeline = `<div class="timeline">
+      <div class="timeline-hours">${hours.map((t) => `<span style="left:${(((t - from) / span) * 100).toFixed(2)}%">${pad(new Date(t).getHours())}:00</span>`).join("")}</div>
+      <div class="timeline-track">${entries
+        .map((e, i) => `<i title="${esc(e.label || projectName(e.video_id))}" style="left:${(((starts[i] - from) / span) * 100).toFixed(2)}%;width:${Math.max(0.6, ((ends[i] - starts[i]) / span) * 100).toFixed(2)}%;background:${projectColor(e.video_id)}"></i>`)
+        .join("")}</div>
+      <div class="legend">${totalsByProject(entries, (e) => overlap(e, day))
+        .map(([id, ms]) => `<span><i class="dot" style="background:${projectColor(id)}"></i>${esc(projectName(id))} <b>${duration(ms)}</b></span>`)
+        .join("")}</div>
+    </div>`;
+  }
+
+  const rows = entries
+    .map(
+      (e) => `<li class="row"><i class="dot" style="background:${projectColor(e.video_id)}"></i>
+        <span class="time-range">${esc(fmt.time.format(new Date(e.started_at)))} – ${e.ended_at ? esc(fmt.time.format(new Date(e.ended_at))) : "en cours"}</span>
+        <span class="muted small time-dur">${duration(overlap(e, day))}</span>
+        <button type="button" class="row-main" data-action="edit-time" data-id="${esc(e.id)}">
+          <span class="row-title">${esc(e.label || projectName(e.video_id))}</span>
+          ${e.label && e.video_id ? `<span class="row-sub">${esc(projectName(e.video_id))}</span>` : ""}
+        </button></li>`
+    )
+    .join("");
+
+  return `${starter}
+    <div class="toolbar">
+      <button type="button" class="btn small" data-action="time-move" data-step="-1" aria-label="Jour précédent">‹</button>
+      <button type="button" class="btn small" data-action="time-today">Aujourd'hui</button>
+      <button type="button" class="btn small" data-action="time-move" data-step="1" aria-label="Jour suivant">›</button>
+      <span class="cal-title" style="text-align:left;min-width:0">${esc(fmt.long.format(day))}</span>
+      <span class="spacer"></span>
+      <button type="button" class="btn small" data-action="new-time">Ajouter une entrée</button>
+    </div>
+    <div class="panel glass">
+      <div class="panel-head"><h2>${duration(total)} suivies</h2><span class="muted small">${entries.length} entrée${entries.length > 1 ? "s" : ""}</span></div>
+      ${entries.length ? `${timeline}<ul class="rows">${rows}</ul>` : emptyState(isToday ? "Rien de suivi aujourd'hui. Lance le chrono au début d'une session de travail." : "Rien de suivi ce jour-là.")}
+    </div>`;
+}
+
+function renderTimeStats() {
+  const today = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+  const days = Array.from({ length: 7 }, (_, i) => addDays(today, i - 6));
+  const perDay = days.map((d) => state.db.time_entries.reduce((sum, e) => sum + overlap(e, d), 0));
+  const max = Math.max(...perDay, 1);
+  const within = (n) => (e) => {
+    let ms = 0;
+    for (let i = 0; i < n; i++) ms += overlap(e, addDays(today, -i));
+    return ms;
+  };
+  const block = (title, n) => {
+    const totals = totalsByProject(state.db.time_entries, within(n));
+    const sum = totals.reduce((a, [, ms]) => a + ms, 0);
+    const top = totals[0]?.[1] || 1;
+    return `<section class="panel glass"><div class="panel-head"><h2>${title}</h2><span class="muted small">${duration(sum)}</span></div>
+      ${totals.length ? totals.map(([id, ms]) => `<div class="goal"><span class="goal-top"><span class="row-title">${esc(projectName(id))}</span><span class="muted small">${duration(ms)}</span></span>
+        <span class="bar"><i style="width:${((ms / top) * 100).toFixed(1)}%;background:${projectColor(id)}"></i></span></div>`).join("") : emptyState("Aucune donnée sur cette période.")}
+    </section>`;
+  };
+  return `<div class="home">
+    <section class="panel glass full"><div class="panel-head"><h2>7 derniers jours</h2><span class="muted small">${duration(perDay.reduce((a, b) => a + b, 0))}</span></div>
+      <div class="daybars">${days.map((d, i) => `<div class="daybar"><span class="muted small">${perDay[i] ? duration(perDay[i]) : ""}</span>
+        <i style="height:${Math.max(2, (perDay[i] / max) * 120).toFixed(0)}px"></i><span class="small">${esc(fmt.weekday.format(d))}</span></div>`).join("")}</div>
+    </section>
+    ${block("Par projet, 7 jours", 7)}${block("Par projet, 30 jours", 30)}
+  </div>`;
+}
+
+function timeForm(entry) {
+  const now = new Date();
+  const e = entry || { started_at: new Date(now.getTime() - 3600000).toISOString(), ended_at: now.toISOString() };
+  openForm({
+    title: entry ? "Modifier l'entrée" : "Ajouter une entrée",
+    body: `
+      ${field("Activité", `<input type="text" name="label" value="${esc(e.label)}" maxlength="200">`)}
+      ${field("Projet", projectSelect(e.video_id))}
+      <div class="grid-2">
+        ${field("Début", `<input type="datetime-local" name="started_at" value="${esc(toInput(e.started_at))}" required>`)}
+        ${field("Fin", `<input type="datetime-local" name="ended_at" value="${esc(toInput(e.ended_at))}" ${entry && !entry.ended_at ? "" : "required"}>`)}
+      </div>`,
+    async onSubmit(data) {
+      const start = text(data, "started_at");
+      const end = text(data, "ended_at");
+      if (!start) return "Indique l'heure de début.";
+      const row = {
+        label: text(data, "label"),
+        video_id: text(data, "video_id"),
+        started_at: new Date(start).toISOString(),
+        ended_at: end ? new Date(end).toISOString() : null,
+      };
+      if (row.ended_at && row.ended_at <= row.started_at) return "La fin doit être après le début.";
+      if (!row.ended_at && state.db.time_entries.some((x) => !x.ended_at && x !== entry)) return "Un chrono tourne déjà : indique une heure de fin.";
+      const saved = await run(() => (entry ? store.update("time_entries", entry.id, row) : store.insert("time_entries", row)), "Entrée enregistrée");
+      if (!saved) return "L'enregistrement a échoué.";
+      if (entry) Object.assign(entry, saved);
+      else state.db.time_entries.push(saved);
+    },
+    onDelete: entry
+      ? async () => {
+          const ok = await run(async () => {
+            await store.remove("time_entries", entry.id);
+            return true;
+          }, "Entrée supprimée");
+          if (ok) state.db.time_entries = state.db.time_entries.filter((x) => x.id !== entry.id);
+        }
+      : null,
+  });
+}
+
+/* ---------- Montage : retours sur une vidéo ---------- */
+
+const isDirectVideo = (url) => /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url || "");
+
+function releaseReview() {
+  if (state.reviewSrc?.startsWith("blob:")) URL.revokeObjectURL(state.reviewSrc);
+  state.reviewSrc = null;
+  state.reviewName = "";
+}
+
+function reviewComments() {
+  return state.db.review_comments
+    .filter((c) => c.video_id === state.reviewVideo)
+    .sort((a, b) => Number(a.at_seconds) - Number(b.at_seconds));
+}
+
+function commentsHtml() {
+  const items = reviewComments();
+  const open = items.filter((c) => !c.resolved).length;
+  return `<div class="panel-head"><h2>${items.length} commentaire${items.length > 1 ? "s" : ""}</h2><span class="muted small">${open} à corriger</span></div>
+    ${items.length ? `<ul class="rows comments">${items
+      .map(
+        (c) => `<li class="comment ${c.resolved ? "is-resolved" : ""}">
+          <div class="comment-top"><button type="button" class="timecode" data-action="review-seek" data-at="${Number(c.at_seconds)}">${clock(c.at_seconds)}</button>
+            <span class="muted small">${esc(fmt.day.format(new Date(c.created_at)))}</span><span class="spacer"></span>
+            <button type="button" class="icon-btn" data-action="review-delete" data-id="${esc(c.id)}" aria-label="Supprimer le commentaire">✕</button></div>
+          <p>${esc(c.body)}</p>
+          <label class="source"><input type="checkbox" class="check small-check" data-action="review-resolve" data-id="${esc(c.id)}" ${c.resolved ? "checked" : ""}><span>Corrigé</span></label>
+        </li>`
+      )
+      .join("")}</ul>` : emptyState("Aucun retour. Mets la vidéo en pause au bon moment et écris ton commentaire.")}`;
+}
+
+function markersHtml(total) {
+  if (!(total > 0)) return "";
+  return reviewComments()
+    .map((c) => `<i class="${c.resolved ? "ok" : ""}" style="left:${Math.min(100, (Number(c.at_seconds) / total) * 100).toFixed(2)}%"></i>`)
+    .join("");
+}
+
+function refreshReview() {
+  const player = $("#review-player");
+  const list = $("#review-comments");
+  if (list) list.innerHTML = commentsHtml();
+  const marks = $("#review-marks");
+  if (marks) marks.innerHTML = markersHtml(player?.duration);
+}
+
+function renderMontage() {
+  const videos = state.db.videos.filter((v) => v.kind !== "stream").sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  if (!videos.length) {
+    return `<div class="panel glass">${emptyState("Crée d'abord une fiche vidéo : les retours de montage s'y rattachent.", "new-video", "Créer une vidéo")}</div>`;
+  }
+  if (!videos.some((v) => v.id === state.reviewVideo)) {
+    state.reviewVideo = videos[0].id;
+    releaseReview();
+  }
+  const video = find("videos", state.reviewVideo);
+  if (!state.reviewSrc && isDirectVideo(safeUrl(video.file_url))) state.reviewSrc = safeUrl(video.file_url);
+  const fileLink = safeUrl(video.file_url);
+
+  const stage = state.reviewSrc
+    ? `<video id="review-player" src="${esc(state.reviewSrc)}" controls playsinline preload="metadata"></video>
+       <div class="marks" id="review-marks"></div>`
+    : `<div class="stage-empty"><p>Choisis le fichier du montage sur cet appareil pour le commenter.</p>
+        <p class="muted small">Le fichier reste sur ton appareil : seuls les commentaires sont enregistrés.</p>
+        ${fileLink ? `<p class="small"><a href="${esc(fileLink)}" target="_blank" rel="noopener noreferrer">Ouvrir le lien de la fiche</a></p>` : ""}</div>`;
+
+  return `<div class="toolbar">
+      <select data-action="review-pick" aria-label="Vidéo à commenter" style="max-width:320px">${videos
+        .map((v) => `<option value="${esc(v.id)}" ${v.id === state.reviewVideo ? "selected" : ""}>${esc(v.title)}</option>`)
+        .join("")}</select>
+      <label class="btn small">Choisir un fichier vidéo<input type="file" accept="video/*" data-action="review-file" hidden></label>
+      ${state.reviewName ? `<span class="muted small">${esc(state.reviewName)}</span>` : ""}
+      <span class="spacer"></span>
+      <button type="button" class="btn small" data-action="edit-video" data-id="${esc(video.id)}">Fiche</button>
+    </div>
+    <div class="review">
+      <div class="review-stage">
+        <div class="stage">${stage}</div>
+        <form class="quick review-input" data-form="review-comment">
+          <span class="timecode" id="review-now">${clock(0)}</span>
+          <input type="text" name="body" placeholder="Commente ce moment" aria-label="Commentaire" maxlength="1000" required>
+          <button type="submit" class="btn primary">Publier</button>
+        </form>
+      </div>
+      <aside class="panel glass review-side" id="review-comments">${commentsHtml()}</aside>
+    </div>`;
+}
+
+let timerHandle = null;
+function afterRender() {
+  clearInterval(timerHandle);
+  timerHandle = null;
+  if (state.route === "time" && running()) {
+    timerHandle = setInterval(() => {
+      const el = $("#timer-clock");
+      const active = running();
+      if (el && active) el.textContent = clock((Date.now() - new Date(active.started_at)) / 1000);
+    }, 1000);
+  }
+  if (state.route === "montage") {
+    const player = $("#review-player");
+    if (player) {
+      const now = () => {
+        const el = $("#review-now");
+        if (el) el.textContent = clock(player.currentTime);
+      };
+      player.addEventListener("timeupdate", now);
+      player.addEventListener("seeked", now);
+      player.addEventListener("loadedmetadata", refreshReview);
+      player.addEventListener("error", () => toast("Lecture impossible : ce format ou ce lien n'est pas lisible dans le navigateur.", true));
+    }
+  }
 }
 
 /* ---------- Fenêtres de saisie ---------- */
@@ -693,6 +1138,10 @@ function videoForm(video, defaults = {}) {
           state.db.tasks.forEach((t) => {
             if (t.video_id === video.id) t.video_id = null;
           });
+          state.db.time_entries.forEach((t) => {
+            if (t.video_id === video.id) t.video_id = null;
+          });
+          state.db.review_comments = state.db.review_comments.filter((c) => c.video_id !== video.id);
         }
       : null,
   });
@@ -883,7 +1332,7 @@ const find = (table, id) => state.db[table].find((row) => row.id === id);
 
 const actions = {
   go: (el) => go(el.dataset.route),
-  "quick-add": () => ({ ideas: ideaForm, todo: taskForm }[state.route] || videoForm)(),
+  "quick-add": () => ({ ideas: ideaForm, todo: taskForm, notes: noteForm }[state.route] || videoForm)(),
   "new-video": (el) => {
     const date = el.dataset.date;
     videoForm(null, date ? { planned_at: new Date(`${date}T18:00`).toISOString(), status: "programme" } : {});
@@ -930,7 +1379,7 @@ const actions = {
   "cal-move": (el) => {
     const step = Number(el.dataset.step);
     const c = state.calCursor;
-    state.calCursor = state.calMode === "week" ? addDays(c, step * 7) : new Date(c.getFullYear(), c.getMonth() + step, 1);
+    state.calCursor = state.calMode === "day" ? addDays(c, step) : state.calMode === "week" ? addDays(c, step * 7) : new Date(c.getFullYear(), c.getMonth() + step, 1);
     render();
   },
   "toggle-done": () => {
@@ -962,6 +1411,95 @@ const actions = {
     render();
     videoForm(video);
   },
+  "toggle-nav": (el) => {
+    state.navOpen[el.dataset.key] = el.getAttribute("aria-expanded") !== "true";
+    if (!state.navOpen[el.dataset.key] && SUBS[el.dataset.key].some(([k]) => k === state.route)) return;
+    renderNav();
+  },
+  more: () => {
+    modal.innerHTML = `<form method="dialog"><div class="modal-head"><h2>Modules</h2>
+      <button type="submit" class="icon-btn" aria-label="Fermer">✕</button></div>
+      <div class="nav more-nav">${ROUTES.filter(([key]) => !TAB_ROUTES.includes(key))
+        .map(([key, label, paths, parent]) => `<button type="submit" data-action="go" data-route="${key}">${paths ? icon(paths) : '<span style="width:16px"></span>'}<span>${parent ? "TimeTrackr, " : ""}${label}</span></button>`)
+        .join("")}</div>
+      <p class="muted small">${esc(state.user?.email || "")}</p>
+      ${store.isCloud ? '<button type="submit" class="btn" data-action="sign-out">Se déconnecter</button>' : ""}</form>`;
+    modal.showModal();
+  },
+  theme: () => {
+    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem("theme", next);
+    } catch {
+      /* le thème ne sera pas mémorisé */
+    }
+  },
+  "cal-show": (el) => {
+    state.calShow[el.dataset.key] = el.checked;
+    render();
+  },
+  "new-note": () => noteForm(),
+  "edit-note": (el) => {
+    const n = find("notes", el.dataset.id);
+    if (n) noteForm(n);
+  },
+  "new-time": () => timeForm(),
+  "edit-time": (el) => {
+    const e = find("time_entries", el.dataset.id);
+    if (e) timeForm(e);
+  },
+  "time-stop": async () => {
+    const active = running();
+    if (!active) return;
+    const saved = await run(() => store.update("time_entries", active.id, { ended_at: new Date().toISOString() }), "Chrono arrêté");
+    if (saved) Object.assign(active, saved);
+    render();
+  },
+  "time-move": (el) => {
+    state.timeDay = addDays(state.timeDay, Number(el.dataset.step));
+    render();
+  },
+  "time-today": () => {
+    state.timeDay = new Date();
+    render();
+  },
+  "review-pick": (el) => {
+    state.reviewVideo = el.value;
+    releaseReview();
+    render();
+  },
+  "review-file": (el) => {
+    const file = el.files?.[0];
+    if (!file) return;
+    releaseReview();
+    state.reviewSrc = URL.createObjectURL(file);
+    state.reviewName = file.name;
+    view.innerHTML = renderMontage();
+    afterRender();
+  },
+  "review-seek": (el) => {
+    const player = $("#review-player");
+    if (!player) return toast("Charge d'abord le fichier vidéo pour aller à ce moment.");
+    player.currentTime = Number(el.dataset.at);
+    player.pause();
+  },
+  "review-resolve": async (el) => {
+    const c = find("review_comments", el.dataset.id);
+    if (!c) return;
+    const saved = await run(() => store.update("review_comments", c.id, { resolved: el.checked }));
+    if (saved) Object.assign(c, saved);
+    refreshReview();
+  },
+  "review-delete": async (el) => {
+    const id = el.dataset.id;
+    const ok = await run(async () => {
+      await store.remove("review_comments", id);
+      return true;
+    });
+    if (ok) state.db.review_comments = state.db.review_comments.filter((c) => c.id !== id);
+    refreshReview();
+  },
   "sign-out": async () => {
     await store.auth.signOut();
     location.reload();
@@ -970,7 +1508,7 @@ const actions = {
 
 document.addEventListener("click", (event) => {
   const el = event.target.closest("[data-action]");
-  if (!el || el.matches("input[type=checkbox]")) return;
+  if (!el || el.matches("input[type=checkbox], select, input[type=file]")) return;
   const handler = actions[el.dataset.action];
   if (handler) handler(el, event);
 });
@@ -984,7 +1522,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 document.addEventListener("change", (event) => {
-  const el = event.target.closest("input[type=checkbox][data-action]");
+  const el = event.target.closest("input[type=checkbox][data-action], select[data-action], input[type=file][data-action]");
   if (el) actions[el.dataset.action]?.(el, event);
 });
 
@@ -993,12 +1531,35 @@ view.addEventListener("submit", async (event) => {
   if (!form) return;
   event.preventDefault();
   const data = new FormData(form);
+  if (form.dataset.form === "time-start") {
+    if (running()) return;
+    const saved = await run(
+      () => store.insert("time_entries", { label: text(data, "label"), video_id: text(data, "video_id"), started_at: new Date().toISOString(), ended_at: null }),
+      "Chrono lancé"
+    );
+    if (saved) state.db.time_entries.push(saved);
+    render();
+    return;
+  }
+  if (form.dataset.form === "review-comment") {
+    const body = text(data, "body");
+    if (!body || !state.reviewVideo) return;
+    const player = $("#review-player");
+    if (player) player.pause();
+    const saved = await run(() =>
+      store.insert("review_comments", { video_id: state.reviewVideo, at_seconds: Math.round((player?.currentTime || 0) * 10) / 10, body, resolved: false })
+    );
+    if (saved) state.db.review_comments.push(saved);
+    form.reset();
+    refreshReview();
+    return;
+  }
   const title = text(data, "title");
   if (!title) return;
   if (form.dataset.form === "quick-idea") {
     const saved = await run(() => store.insert("ideas", { title, tags: [], platforms: [] }), "Idée notée");
     if (saved) state.db.ideas.push(saved);
-  } else {
+  } else if (form.dataset.form === "quick-task") {
     const saved = await run(
       () => store.insert("tasks", { title, due_on: text(data, "due_on"), priority: 2, done: false }),
       "Tâche ajoutée"
@@ -1028,7 +1589,7 @@ view.addEventListener("dragend", () => {
 
 function dropZone(event) {
   if (!state.drag) return null;
-  const selector = { "video-status": '[data-drop="status"]', "video-date": '[data-drop="date"]', block: "[data-block]" }[state.drag.type];
+  const selector = { "video-status": '[data-drop="status"]', "video-date": '[data-drop="date"]', "task-date": '[data-drop="date"]', block: "[data-block]" }[state.drag.type];
   return event.target.closest(selector);
 }
 
@@ -1056,6 +1617,15 @@ view.addEventListener("drop", async (event) => {
     } catch {
       /* l'ordre ne sera simplement pas mémorisé */
     }
+    render();
+    return;
+  }
+
+  if (drag.type === "task-date") {
+    const task = find("tasks", drag.id);
+    if (!task || task.due_on === zone.dataset.date) return;
+    const savedTask = await run(() => store.update("tasks", task.id, { due_on: zone.dataset.date }));
+    if (savedTask) Object.assign(task, savedTask);
     render();
     return;
   }
@@ -1235,6 +1805,12 @@ document.addEventListener("visibilitychange", async () => {
     console.warn("Actualisation impossible", err);
   }
 });
+
+try {
+  if (localStorage.getItem("theme") === "light") document.documentElement.dataset.theme = "light";
+} catch {
+  /* thème par défaut */
+}
 
 (async () => {
   try {

@@ -1,7 +1,7 @@
 // Accès aux données : Supabase quand il est configuré, sinon stockage local (mode démo).
 import { SUPABASE_URL, SUPABASE_KEY } from "./config.js";
 
-export const TABLES = ["videos", "ideas", "tasks", "goals", "metrics"];
+export const TABLES = ["videos", "ideas", "tasks", "goals", "metrics", "notes", "time_entries", "review_comments"];
 export const isCloud = Boolean(SUPABASE_URL && SUPABASE_KEY);
 
 let client = null;
@@ -10,7 +10,11 @@ const LOCAL_KEY = "dashboard-demo-v1";
 function readLocal() {
   try {
     const raw = localStorage.getItem(LOCAL_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const db = JSON.parse(raw);
+      TABLES.forEach((name) => (db[name] ||= []));
+      return db;
+    }
   } catch (err) {
     console.warn("Lecture locale impossible", err);
   }
@@ -119,6 +123,10 @@ export async function remove(table, id) {
       db.tasks.forEach((t) => {
         if (t.video_id === id) t.video_id = null;
       });
+      db.time_entries.forEach((t) => {
+        if (t.video_id === id) t.video_id = null;
+      });
+      db.review_comments = db.review_comments.filter((c) => c.video_id !== id);
     }
     writeLocal(db);
     return;
