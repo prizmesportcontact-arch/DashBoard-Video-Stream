@@ -428,6 +428,41 @@ img.acc { object-fit: cover; background: var(--glass-2); box-shadow: 0 0 0 2px v
 :root[data-theme="light"] .tabbar button[aria-current="page"] { background: var(--glass-2); }
 
 /* Écrans moyens */
+
+/* Stats */
+.stats-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 12px; }
+.stats-filters .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.kpi { display: grid; gap: 2px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-m, 14px); background: var(--panel); }
+.kpi-label { font-size: 0.82rem; color: var(--ink-2); }
+.kpi-value { font-family: var(--font-display); font-size: 2rem; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; color: var(--ink); }
+.kpi-value.small-value { font-size: 1.25rem; padding: 6px 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart { position: relative; margin-top: 4px; }
+.chart svg { display: block; width: 100%; height: 180px; overflow: visible; touch-action: pan-y; }
+.mini .chart svg { height: 70px; }
+.chart .line { fill: none; stroke: var(--p, var(--ink)); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart .tick { position: absolute; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap; }
+.chart .tick.y { left: 0; width: 36px; text-align: right; transform: translateY(-50%); }
+.chart .tick.x { bottom: 0; }
+.panel.align-start { align-self: start; }
+.chart .cross { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-end { position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: var(--p, var(--ink)); box-shadow: 0 0 0 2px var(--panel); pointer-events: none; }
+.chart-tip { position: absolute; top: -6px; transform: translate(-50%, -100%); display: grid; gap: 1px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--black); font-size: 0.8rem; white-space: nowrap; pointer-events: none; z-index: 2; }
+.chart-tip strong { font-variant-numeric: tabular-nums; }
+.chart-empty { padding: 18px 0; }
+.minis { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.mini { padding: 12px; border: 1px solid var(--line); border-top: 2px solid var(--p, var(--line)); border-radius: var(--r-s); background: var(--black); min-width: 0; }
+.mini-head { display: flex; align-items: center; gap: 7px; font-weight: 500; color: var(--ink-2); min-width: 0; }
+.mini-head .acc { width: 18px; height: 18px; font-size: 0.58rem; }
+.mini-value { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.mini-value span:first-child { font-family: var(--font-display); font-size: 1.35rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mini-value .delta { font-size: 0.85rem; }
+.mini .chart-empty { padding: 8px 0 0; font-size: 0.78rem; }
+.table-wrap { overflow-x: auto; }
+.table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.goal.p-youtube .bar i, .goal.p-tiktok .bar i, .goal.p-instagram .bar i, .goal.p-twitch .bar i { background: var(--p); }
+
 @media (max-width: 1100px) {
   .home > .panel { grid-column: 1 / -1; }
   .accounts-grid > .panel { grid-column: 1 / -1; }
@@ -460,6 +495,14 @@ img.acc { object-fit: cover; background: var(--glass-2); box-shadow: 0 0 0 2px v
   .day-name { width: 74px; flex: none; }
   .day .pill { width: auto; max-width: 100%; flex: 1 1 140px; }
   .figures { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: 1fr 1fr; }
+  .kpis .kpi:last-child { grid-column: 1 / -1; }
+  .kpi-value { font-size: 1.6rem; }
+  .stats-table thead { display: table-header-group; }
+  .stats-table, .stats-table tbody { display: table; width: 100%; }
+  .stats-table tbody { display: table-row-group; }
+  .stats-table tr { display: table-row; padding: 0; }
+  .stats-table td, .stats-table th { display: table-cell; padding: 8px 6px; border-bottom: 1px solid var(--line); }
   .chip-label { display: none; }
   .figure { display: grid; grid-template-columns: 1fr auto; align-items: center; }
   .figure-value { margin: 0; font-size: 1.5rem; }

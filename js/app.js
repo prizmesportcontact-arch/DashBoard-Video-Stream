@@ -28,6 +28,7 @@ const ROUTES = [
   ["time-stats", "Statistiques", "", "time"],
   ["notes", "Notes", '<path d="M6 3.5h9l4 4V20a.5.5 0 0 1-.5.5h-12A.5.5 0 0 1 6 20z"/><path d="M9 12h6M9 16h4"/>'],
   ["ideas", "Idées", '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.3 1 2.1h5c0-.8.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>'],
+  ["stats", "Stats", '<path d="M4 20V4"/><path d="M4 20h16"/><path d="m7.5 15 4-4.5 3 3L20 7"/>'],
   ["accounts", "Comptes", '<circle cx="9" cy="8.5" r="3.5"/><path d="M3 20c.8-3.5 3.2-5.5 6-5.5s5.2 2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M18.5 20c-.3-1.9-1-3.4-2.1-4.5"/>'],
 ];
 const SUBS = { time: [["time", "Journée"], ["time-stats", "Statistiques"]] };
@@ -60,6 +61,8 @@ const state = {
   reviewLoading: null,
   drag: null,
   loadedAt: 0,
+  statsRange: 30,
+  statsPlatform: null,
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -101,6 +104,7 @@ const fmt = {
   month: new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric" }),
   time: new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit" }),
   num: new Intl.NumberFormat("fr-FR"),
+  short: new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" }),
 };
 const when = (iso) => (iso ? `${fmt.day.format(new Date(iso))} à ${fmt.time.format(new Date(iso))}` : "Sans date");
 const planKey = (v) => (v.planned_at ? dayKey(new Date(v.planned_at)) : null);
@@ -270,7 +274,7 @@ function render() {
   renderNav();
   const renderers = {
     home: renderHome, videos: renderVideos, calendar: renderCalendar, ideas: renderIdeas, todo: renderTodo,
-    montage: renderMontage, accounts: renderAccounts, thumbs: renderThumbs, time: renderTime, "time-stats": renderTimeStats, notes: renderNotes,
+    montage: renderMontage, accounts: renderAccounts, thumbs: renderThumbs, time: renderTime, "time-stats": renderTimeStats, notes: renderNotes, stats: renderStats,
   };
   if (state.route !== "montage") releaseReview();
   view.innerHTML = renderers[state.route]();
@@ -1085,6 +1089,7 @@ function renderMontage() {
 
 let timerHandle = null;
 function afterRender() {
+  if (state.route === "stats") bindCharts();
   clearInterval(timerHandle);
   timerHandle = null;
   if (state.route === "time" && running()) {
@@ -1107,6 +1112,257 @@ function afterRender() {
       player.addEventListener("error", () => toast("Lecture impossible : ce format ou ce lien n'est pas lisible dans le navigateur.", true));
     }
   }
+}
+
+/* ---------- Stats ---------- */
+
+const STATS_RANGES = [
+  [7, "7 jours"],
+  [30, "30 jours"],
+  [90, "90 jours"],
+  [0, "Tout"],
+];
+
+function metricRows(accountId) {
+  return state.db.metrics.filter((m) => m.account_id === accountId).sort((a, b) => a.recorded_on.localeCompare(b.recorded_on));
+}
+
+// Dernière valeur connue à une date (on garde le dernier relevé tant qu'il n'y en a pas de nouveau).
+function valueOn(rows, key) {
+  let found = null;
+  for (const m of rows) {
+    if (m.recorded_on > key) break;
+    found = m;
+  }
+  return found ? Number(found.followers) || 0 : null;
+}
+
+function statsDays() {
+  const today = dayKey(new Date());
+  const all = state.db.metrics.map((m) => m.recorded_on).filter(Boolean).sort();
+  if (!all.length) return [];
+  let start = all[0];
+  if (state.statsRange) {
+    const limit = dayKey(addDays(new Date(), -(state.statsRange - 1)));
+    if (limit > start) start = limit;
+  }
+  const days = [];
+  for (let d = fromKey(start); dayKey(d) <= today; d = addDays(d, 1)) days.push(dayKey(d));
+  return days;
+}
+
+function seriesFor(accounts, days) {
+  const rows = accounts.map((a) => metricRows(a.id));
+  return days.map((key) => {
+    const values = rows.map((r) => valueOn(r, key)).filter((v) => v !== null);
+    return { key, value: values.length ? values.reduce((a, b) => a + b, 0) : null };
+  });
+}
+
+function niceMax(value) {
+  if (value <= 5) return 5;
+  const pow = 10 ** Math.floor(Math.log10(value));
+  const step = [1, 2, 2.5, 5, 10].map((s) => s * pow).find((s) => s * 4 >= value) || pow * 10;
+  return Math.ceil(value / step) * step;
+}
+
+// Courbe SVG simple : une seule série, axe à zéro, survol avec réticule et bulle.
+function lineChart(points, { label, height = 180, compact = false } = {}) {
+  const known = points.filter((p) => p.value !== null);
+  if (known.length < 2) {
+    return `<p class="muted small chart-empty">${known.length ? "Un seul relevé pour l'instant : la courbe apparaît dès le deuxième jour où Régie est ouvert." : "Pas encore de relevé sur cette période."}</p>`;
+  }
+  const w = 600;
+  const h = height;
+  const pad = compact ? { l: 4, r: 4, t: 8, b: 4 } : { l: 44, r: 12, t: 12, b: 24 };
+  const min = Math.min(...known.map((p) => p.value));
+  const maxRaw = Math.max(...known.map((p) => p.value));
+  // Axe à zéro pour le total ; les petites courbes zooment sur leur plage pour montrer la tendance.
+  const lo = compact ? Math.max(0, min - Math.max(1, (maxRaw - min) * 0.2)) : 0;
+  const hi = compact ? maxRaw + Math.max(1, (maxRaw - min) * 0.2) : niceMax(maxRaw);
+  const x = (i) => pad.l + (i / Math.max(1, points.length - 1)) * (w - pad.l - pad.r);
+  const y = (v) => pad.t + (1 - (v - lo) / (hi - lo || 1)) * (h - pad.t - pad.b);
+  let d = "";
+  points.forEach((p, i) => {
+    if (p.value === null) return;
+    d += `${d ? "L" : "M"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`;
+  });
+  const grid = compact
+    ? ""
+    : [0, 0.5, 1]
+        .map((f) => {
+          const v = lo + (hi - lo) * f;
+          return `<line class="grid" x1="${pad.l}" x2="${w - pad.r}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/>`;
+        })
+        .join("");
+  const xTicks = compact
+    ? ""
+    : [0, Math.floor((points.length - 1) / 2), points.length - 1]
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .map((i) => `<span class="tick x" style="left:${((x(i) / w) * 100).toFixed(2)}%;transform:translateX(${i === 0 ? "0" : i === points.length - 1 ? "-100%" : "-50%"})">${esc(fmt.short.format(fromKey(points[i].key)))}</span>`)
+        .join("");
+  const yTicks = compact
+    ? ""
+    : [0, 0.5, 1]
+        .map((f) => `<span class="tick y" style="top:${((y(lo + (hi - lo) * f) / h) * 100).toFixed(2)}%">${fmt.num.format(Math.round(lo + (hi - lo) * f))}</span>`)
+        .join("");
+  const last = known.at(-1);
+  const lastIndex = points.lastIndexOf(last);
+  const data = esc(JSON.stringify(points.map((p) => [p.key, p.value])));
+  return `<div class="chart" data-points="${data}" data-label="${esc(label || "")}" data-pad="${pad.l},${pad.r}">
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label || "Évolution")}">
+      ${grid}
+      <path class="line" d="${d}" vector-effect="non-scaling-stroke"/>
+      <line class="cross" x1="0" x2="0" y1="${pad.t}" y2="${h - pad.b}" vector-effect="non-scaling-stroke" hidden/>
+    </svg>
+    ${yTicks}${xTicks}
+    <span class="chart-end" style="left:${((x(lastIndex) / w) * 100).toFixed(2)}%;top:${((y(last.value) / h) * 100).toFixed(2)}%"></span>
+    <div class="chart-tip" hidden></div>
+  </div>`;
+}
+
+function gainOver(accounts, days) {
+  const rows = accounts.map((a) => metricRows(a.id));
+  const end = dayKey(new Date());
+  const start = dayKey(addDays(new Date(), -days));
+  let total = 0;
+  let known = false;
+  rows.forEach((r) => {
+    const now = valueOn(r, end);
+    const before = valueOn(r, start) ?? (r[0] && r[0].recorded_on > start ? Number(r[0].followers) : null);
+    if (now !== null && before !== null) {
+      total += now - before;
+      known = true;
+    }
+  });
+  return known ? total : null;
+}
+
+const signed = (v) => (v === null ? "–" : `${v > 0 ? "+" : ""}${fmt.num.format(v)}`);
+const deltaClass = (v) => (v > 0 ? "up" : v < 0 ? "down" : "");
+
+function renderStats() {
+  const accounts = sortedAccounts();
+  if (!accounts.length || !state.db.metrics.length) {
+    return `<section class="panel glass">${emptyState("Branche tes comptes dans Comptes : Régie relève tes abonnés chaque jour et les courbes apparaissent ici.", "go-accounts", "Ouvrir Comptes")}</section>`;
+  }
+  const scope = state.statsPlatform ? accounts.filter((a) => a.platform === state.statsPlatform) : accounts;
+  const days = statsDays();
+  const today = dayKey(new Date());
+  const totalNow = scope.reduce((sum, a) => sum + (valueOn(metricRows(a.id), today) ?? 0), 0);
+  const periodDays = state.statsRange || Math.max(1, days.length - 1);
+  const gainPeriod = gainOver(scope, periodDays);
+  const gain7 = gainOver(scope, 7);
+  const best = scope
+    .map((a) => ({ a, g: gainOver([a], periodDays) }))
+    .filter((x) => x.g !== null)
+    .sort((p, q) => q.g - p.g)[0];
+  const rangeLabel = STATS_RANGES.find(([n]) => n === state.statsRange)?.[1] || "Tout";
+
+  const filters = `<div class="stats-filters">
+    <div class="segmented" role="group" aria-label="Période">${STATS_RANGES.map(
+      ([n, l]) => `<button type="button" data-action="stats-range" data-range="${n}" aria-pressed="${state.statsRange === n}">${l}</button>`
+    ).join("")}</div>
+    <div class="chips">
+      <button type="button" class="chip" data-action="stats-platform" data-platform="" aria-pressed="${!state.statsPlatform}">Tous les réseaux</button>
+      ${Object.entries(PLATFORMS)
+        .filter(([k]) => accounts.some((a) => a.platform === k))
+        .map(([k, l]) => `<button type="button" class="chip" data-action="stats-platform" data-platform="${k}" aria-pressed="${state.statsPlatform === k}"><i class="dot p-${k}"></i>${l}</button>`)
+        .join("")}
+    </div>
+  </div>`;
+
+  const kpis = `<div class="kpis">
+    <div class="kpi"><span class="kpi-label">Abonnés au total</span><span class="kpi-value">${fmt.num.format(totalNow)}</span><span class="muted small">${scope.length} compte${scope.length > 1 ? "s" : ""}</span></div>
+    <div class="kpi"><span class="kpi-label">Gagnés sur ${esc(rangeLabel.toLowerCase())}</span><span class="kpi-value delta ${deltaClass(gainPeriod)}">${signed(gainPeriod)}</span><span class="muted small">${gain7 !== null && state.statsRange !== 7 ? `${signed(gain7)} ces 7 derniers jours` : "&nbsp;"}</span></div>
+    <div class="kpi"><span class="kpi-label">Meilleure progression</span><span class="kpi-value small-value">${best && best.g > 0 ? esc(best.a.name) : "–"}</span><span class="muted small">${best && best.g > 0 ? `${esc(PLATFORMS[best.a.platform])}, ${signed(best.g)}` : "Pas encore de progression mesurée"}</span></div>
+  </div>`;
+
+  const total = `<section class="panel glass full"><div class="panel-head"><h2>Abonnés ${state.statsPlatform ? `sur ${esc(PLATFORMS[state.statsPlatform])}` : "sur tous tes réseaux"}</h2><span class="muted small">${esc(rangeLabel)}</span></div>
+    ${lineChart(seriesFor(scope, days), { label: "Abonnés au total" })}
+  </section>`;
+
+  const byPlatform = Object.entries(PLATFORMS)
+    .map(([k, l]) => ({ k, l, v: accounts.filter((a) => a.platform === k).reduce((s, a) => s + (valueOn(metricRows(a.id), today) ?? 0), 0), n: accounts.filter((a) => a.platform === k).length }))
+    .filter((p) => p.n)
+    .sort((a, b) => b.v - a.v);
+  const top = Math.max(1, ...byPlatform.map((p) => p.v));
+  const platformsPanel = state.statsPlatform
+    ? ""
+    : `<section class="panel glass align-start"><div class="panel-head"><h2>Par réseau</h2><span class="muted small">aujourd'hui</span></div>
+      ${byPlatform
+        .map(
+          (p) => `<div class="goal p-${p.k}"><span class="goal-top"><span class="row-title">${esc(p.l)}</span><span class="small">${fmt.num.format(p.v)}</span></span>
+          <span class="bar"><i style="width:${((p.v / top) * 100).toFixed(1)}%"></i></span></div>`
+        )
+        .join("")}
+    </section>`;
+
+  const multiples = scope
+    .map((a) => {
+      const rows = metricRows(a.id);
+      const now = valueOn(rows, today);
+      const g = gainOver([a], periodDays);
+      return `<div class="mini p-${esc(a.platform)}">
+        <div class="mini-head">${accountBadge(a)}<span class="figure-label">${esc(a.name)}</span></div>
+        <div class="figure-platform">${esc(PLATFORMS[a.platform])}${a.handle ? ` <span>${esc(a.handle)}</span>` : ""}</div>
+        <div class="mini-value"><span>${now === null ? "–" : fmt.num.format(now)}</span><span class="delta ${deltaClass(g)}">${g === null ? "" : signed(g)}</span></div>
+        ${lineChart(seriesFor([a], days), { label: `${a.name}, ${PLATFORMS[a.platform]}`, height: 70, compact: true })}
+      </div>`;
+    })
+    .join("");
+
+  const table = `<section class="panel glass full"><div class="panel-head"><h2>Détail par compte</h2></div>
+    <div class="table-wrap"><table class="table stats-table"><thead><tr><th>Compte</th><th>Réseau</th><th class="num">Abonnés</th><th class="num">7 jours</th><th class="num">30 jours</th><th class="num">Contenus</th></tr></thead>
+    <tbody>${scope
+      .map((a) => {
+        const now = valueOn(metricRows(a.id), today);
+        const g7 = gainOver([a], 7);
+        const g30 = gainOver([a], 30);
+        return `<tr><td>${esc(a.name)}${a.handle ? ` <span class="muted small">${esc(a.handle)}</span>` : ""}</td><td>${esc(PLATFORMS[a.platform])}</td>
+          <td class="num">${now === null ? "–" : fmt.num.format(now)}</td><td class="num delta ${deltaClass(g7)}">${signed(g7)}</td><td class="num delta ${deltaClass(g30)}">${signed(g30)}</td>
+          <td class="num">${a.content_count == null ? "–" : fmt.num.format(a.content_count)}</td></tr>`;
+      })
+      .join("")}</tbody></table></div>
+    <p class="muted small">Régie relève tes abonnés une fois par jour, quand tu l'ouvres. Un jour sans ouverture reprend la dernière valeur connue.</p>
+  </section>`;
+
+  return `${filters}${kpis}<div class="home">${total}
+    <section class="panel glass ${state.statsPlatform ? "full" : ""}"><div class="panel-head"><h2>Par compte</h2><span class="muted small">${esc(rangeLabel)}</span></div><div class="minis">${multiples}</div></section>
+    ${platformsPanel}${table}</div>`;
+}
+
+// Survol des courbes : réticule vertical + bulle avec la date et la valeur.
+function bindCharts() {
+  view.querySelectorAll(".chart[data-points]").forEach((chart) => {
+    const points = JSON.parse(chart.dataset.points);
+    const [padL, padR] = chart.dataset.pad.split(",").map(Number);
+    const svg = chart.querySelector("svg");
+    const cross = chart.querySelector(".cross");
+    const tip = chart.querySelector(".chart-tip");
+    const move = (event) => {
+      const box = svg.getBoundingClientRect();
+      const vx = ((event.clientX - box.left) / box.width) * 600;
+      const span = 600 - padL - padR;
+      const i = Math.max(0, Math.min(points.length - 1, Math.round(((vx - padL) / span) * (points.length - 1))));
+      const [key, value] = points[i];
+      const px = padL + (i / Math.max(1, points.length - 1)) * span;
+      cross.setAttribute("x1", px);
+      cross.setAttribute("x2", px);
+      cross.hidden = false;
+      tip.hidden = false;
+      tip.innerHTML = `<span class="muted">${esc(fmt.day.format(fromKey(key)))}</span><strong>${value === null ? "–" : fmt.num.format(value)}</strong>`;
+      const left = (px / 600) * box.width;
+      tip.style.left = `${Math.min(Math.max(left, 50), box.width - 50)}px`;
+    };
+    const leave = () => {
+      cross.hidden = true;
+      tip.hidden = true;
+    };
+    svg.addEventListener("pointermove", move);
+    svg.addEventListener("pointerdown", move);
+    svg.addEventListener("pointerleave", leave);
+  });
 }
 
 /* ---------- Comptes ---------- */
@@ -1842,6 +2098,14 @@ const actions = {
     render();
   },
   "go-accounts": () => go("accounts"),
+  "stats-range": (el) => {
+    state.statsRange = Number(el.dataset.range) || 0;
+    render();
+  },
+  "stats-platform": (el) => {
+    state.statsPlatform = el.dataset.platform || null;
+    render();
+  },
   "account-platform": (el) => {
     const box = modal.querySelector("[data-ig]");
     if (box) box.hidden = el.value !== "instagram";
