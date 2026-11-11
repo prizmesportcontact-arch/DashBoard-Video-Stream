@@ -130,6 +130,8 @@ declare
 begin
   foreach t in array array['videos', 'ideas', 'tasks', 'goals', 'metrics', 'notes', 'time_entries', 'review_comments'] loop
     execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from anon', t);
+    execute format('grant select, insert, update, delete on public.%I to authenticated', t);
 
     execute format('drop policy if exists "%s_owner_select" on public.%I', t, t);
     execute format('drop policy if exists "%s_owner_insert" on public.%I', t, t);
