@@ -1,4 +1,4 @@
-# Dashboard créateur
+# Régie
 
 Un seul site pour suivre mes vidéos et mes streams (TikTok, Instagram, Twitch) : accueil, vidéos, calendrier, idées, todo.
 

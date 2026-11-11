@@ -59,7 +59,7 @@ create table if not exists public.goals (
 create table if not exists public.metrics (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
-  platform text not null check (platform in ('tiktok', 'instagram', 'twitch')),
+  platform text not null check (platform in ('tiktok', 'instagram', 'twitch', 'youtube')),
   recorded_on date not null default current_date,
   followers integer not null default 0 check (followers >= 0),
   views integer not null default 0 check (views >= 0),

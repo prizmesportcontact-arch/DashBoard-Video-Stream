@@ -3,7 +3,7 @@ import * as store from "./store.js";
 
 /* ---------- Références ---------- */
 
-const PLATFORMS = { tiktok: "TikTok", instagram: "Instagram", twitch: "Twitch" };
+const PLATFORMS = { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram", twitch: "Twitch" };
 const STATUSES = [
   ["idee", "Idée"],
   ["tourne", "Tourné"],

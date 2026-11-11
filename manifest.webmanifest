@@ -1,6 +1,6 @@
 {
-  "name": "Dashboard créateur",
-  "short_name": "Dashboard",
+  "name": "Régie",
+  "short_name": "Régie",
   "description": "Planning, idées et tâches pour mes vidéos et mes streams.",
   "start_url": "./",
   "scope": "./",

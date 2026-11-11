@@ -5,4 +5,4 @@
 export const SUPABASE_URL = "https://rusgzubcppxsfualrgps.supabase.co";
 export const SUPABASE_KEY = "sb_publishable_JW7J6KvvjtoInb7IIvJ35A_ZPyIc5oC";
 
-export const APP_NAME = "Dashboard créateur";
+export const APP_NAME = "Régie";

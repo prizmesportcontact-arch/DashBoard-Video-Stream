@@ -19,6 +19,7 @@
   --tiktok: #12d6c5;
   --instagram: #ff3d7f;
   --twitch: #8257ff;
+  --youtube: #ff4d4d;
   --sponsor: #f5a524;
   --done: #3ecf6e;
   --late: #e5484d;
@@ -169,7 +170,8 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
 .p-tiktok { --p: var(--tiktok); }
 .p-instagram { --p: var(--instagram); }
 .p-twitch { --p: var(--twitch); }
-.dot.p-tiktok, .dot.p-instagram, .dot.p-twitch { background: var(--p); }
+.p-youtube { --p: var(--youtube); }
+.dot.p-tiktok, .dot.p-instagram, .dot.p-twitch, .dot.p-youtube { background: var(--p); }
 .tag { display: inline-flex; align-items: center; padding: 1px 9px; border-radius: 999px; background: var(--glass-2); font-size: 0.8rem; color: var(--ink-2); }
 .tag.sponsor { background: rgba(255, 178, 36, 0.16); color: var(--sponsor); font-weight: 600; }
 .tag.stream { background: rgba(130, 87, 255, 0.2); color: #c4b1ff; }
@@ -208,7 +210,7 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
 .pill.is-done { opacity: 0.55; text-decoration: line-through; }
 .pill time { color: var(--ink-2); margin-right: 5px; font-variant-numeric: tabular-nums; }
 
-.figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .figure { padding: 12px; border-radius: var(--r-s); border: 1px solid var(--line); background: var(--black); }
 .figure-name { display: flex; align-items: center; gap: 7px; font-weight: 500; color: var(--ink-2); }
 .figure-value { font-family: var(--font-display); font-size: 1.5rem; font-weight: 600; line-height: 1.2; margin-top: 6px; font-variant-numeric: tabular-nums; }
