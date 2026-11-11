@@ -16,4 +16,4 @@ export const YOUTUBE_API_KEY = "AIzaSyCPf4OZZc9QYANT7FVcuV-Y8QF_74HX3uQ";
 
 // Connexion TikTok : identifiant public (« Client key ») de l'app déclarée sur developers.tiktok.com.
 // Le secret, lui, reste dans la fonction Supabase « tiktok ».
-export const TIKTOK_CLIENT_KEY = "";
+export const TIKTOK_CLIENT_KEY = "sbawi32h5ubnaudi28";
