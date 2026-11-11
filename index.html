@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Dashboard créateur</title>
+  <meta name="description" content="Planning, idées et tâches pour mes vidéos et mes streams.">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Dashboard">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
+
+  <div id="boot" class="boot">Chargement…</div>
+
+  <!-- Connexion -->
+  <main id="auth" class="auth" hidden>
+    <form id="auth-form" class="glass auth-card" novalidate>
+      <h1 id="auth-title">Connexion</h1>
+      <p class="muted" id="auth-sub">Retrouve ton planning, tes idées et tes tâches sur tous tes appareils.</p>
+      <label class="field">
+        <span>Adresse e-mail</span>
+        <input type="email" name="email" autocomplete="email" required>
+      </label>
+      <label class="field">
+        <span>Mot de passe</span>
+        <input type="password" name="password" autocomplete="current-password" minlength="8" required>
+      </label>
+      <p class="form-error" id="auth-error" role="alert" hidden></p>
+      <button class="btn primary wide" type="submit" id="auth-submit">Se connecter</button>
+      <button class="btn link" type="button" id="auth-toggle">Créer un compte</button>
+    </form>
+  </main>
+
+  <!-- Application -->
+  <div id="app" class="app" hidden>
+    <aside class="sidebar glass" aria-label="Modules">
+      <div class="brand">
+        <img src="icons/icon.svg" alt="" width="30" height="30">
+        <span id="brand-name">Dashboard créateur</span>
+      </div>
+      <nav id="nav" class="nav"></nav>
+      <div class="soon">
+        <p class="soon-title">Prochaines phases</p>
+        <ul>
+          <li>Clips</li><li>Stream</li><li>Stats</li><li>Agents IA</li>
+          <li>Miniatures</li><li>Mails</li><li>Publication</li><li>Équipe</li>
+        </ul>
+      </div>
+      <div class="account">
+        <span class="account-mail" id="account-mail"></span>
+        <button class="btn ghost small" type="button" data-action="sign-out" id="sign-out">Se déconnecter</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <h1 id="view-title">Accueil</h1>
+        <div class="search">
+          <input type="search" id="search" placeholder="Rechercher une vidéo, une idée, une tâche" aria-label="Rechercher" autocomplete="off">
+          <div id="search-results" class="search-results glass" hidden></div>
+        </div>
+        <button class="btn primary" type="button" data-action="quick-add" id="quick-add">Ajouter</button>
+      </header>
+      <p id="demo-banner" class="demo-banner" hidden>
+        Mode démo : les données restent sur cet appareil et ne sont pas synchronisées.
+      </p>
+      <section id="view" class="view" tabindex="-1"></section>
+    </div>
+
+    <nav id="tabbar" class="tabbar glass" aria-label="Modules"></nav>
+  </div>
+
+  <dialog id="modal" class="modal glass"></dialog>
+  <div id="toast" class="toast glass" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
