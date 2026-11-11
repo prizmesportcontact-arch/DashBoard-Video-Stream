@@ -24,6 +24,7 @@ const ROUTES = [
   ["time-stats", "Statistiques", "", "time"],
   ["notes", "Notes", '<path d="M6 3.5h9l4 4V20a.5.5 0 0 1-.5.5h-12A.5.5 0 0 1 6 20z"/><path d="M9 12h6M9 16h4"/>'],
   ["ideas", "Idées", '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.3 1 2.1h5c0-.8.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>'],
+  ["accounts", "Comptes", '<circle cx="9" cy="8.5" r="3.5"/><path d="M3 20c.8-3.5 3.2-5.5 6-5.5s5.2 2 6 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M18.5 20c-.3-1.9-1-3.4-2.1-4.5"/>'],
 ];
 const SUBS = { time: [["time", "Journée"], ["time-stats", "Statistiques"]] };
 const TAB_ROUTES = ["home", "videos", "calendar", "todo"];
@@ -32,11 +33,12 @@ const PROJECT_COLORS = ["#12d6c5", "#ff3d7f", "#8257ff", "#f5a524", "#3ecf6e", "
 const HOME_BLOCKS = ["week", "figures", "today", "upcoming", "goals", "recent", "thumbs"];
 
 const state = {
-  db: { videos: [], ideas: [], tasks: [], goals: [], metrics: [], notes: [], time_entries: [], review_comments: [] },
+  db: { accounts: [], videos: [], ideas: [], tasks: [], goals: [], metrics: [], notes: [], time_entries: [], review_comments: [] },
   user: null,
   route: "home",
   videoView: "list",
   platform: null,
+  account: null,
   calMode: window.matchMedia("(max-width: 820px)").matches ? "week" : "month",
   calCursor: new Date(),
   tag: null,
@@ -135,7 +137,38 @@ function steps(status) {
     <span class="status-text">${esc(STATUS_LABEL[status] || status)}</span>`;
 }
 
-const firstPlatform = (v) => (v.platforms?.[0] ? `p-${v.platforms[0]}` : "");
+const PLATFORM_ORDER = Object.keys(PLATFORMS);
+const accountOf = (id) => state.db.accounts.find((a) => a.id === id);
+const sortedAccounts = () =>
+  [...state.db.accounts].sort(
+    (a, b) =>
+      PLATFORM_ORDER.indexOf(a.platform) - PLATFORM_ORDER.indexOf(b.platform) ||
+      a.position - b.position ||
+      a.created_at.localeCompare(b.created_at)
+  );
+const initials = (name) =>
+  String(name || "?")
+    .replace(/^@/, "")
+    .split(/[\s_.-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("") || "?";
+const accountBadge = (a) =>
+  `<span class="acc p-${esc(a.platform)}" title="${esc(a.name)}, ${esc(PLATFORMS[a.platform])}">${esc(initials(a.name))}</span>`;
+const videoAccounts = (v) => (v.account_ids || []).map(accountOf).filter(Boolean);
+const videoBadges = (v) => {
+  const list = videoAccounts(v);
+  return list.length ? `<span class="accs">${list.map(accountBadge).join("")}</span>` : platformDots(v.platforms);
+};
+const videoChannels = (v) => {
+  const list = videoAccounts(v);
+  return list.length ? list.map((a) => a.name).join(", ") : (v.platforms || []).map((p) => PLATFORMS[p]).join(", ");
+};
+const firstPlatform = (v) => {
+  const platform = videoAccounts(v)[0]?.platform || v.platforms?.[0];
+  return platform ? `p-${platform}` : "";
+};
 
 function pill(v, draggable = false) {
   const time = v.planned_at ? `<time>${fmt.time.format(new Date(v.planned_at))}</time>` : "";
@@ -218,7 +251,7 @@ function render() {
   renderNav();
   const renderers = {
     home: renderHome, videos: renderVideos, calendar: renderCalendar, ideas: renderIdeas, todo: renderTodo,
-    montage: renderMontage, thumbs: renderThumbs, time: renderTime, "time-stats": renderTimeStats, notes: renderNotes,
+    montage: renderMontage, accounts: renderAccounts, thumbs: renderThumbs, time: renderTime, "time-stats": renderTimeStats, notes: renderNotes,
   };
   if (state.route !== "montage") releaseReview();
   view.innerHTML = renderers[state.route]();
@@ -265,9 +298,9 @@ function streak() {
   return count;
 }
 
-function figureFor(platform) {
+function figureFor(accountId) {
   const rows = state.db.metrics
-    .filter((m) => m.platform === platform)
+    .filter((m) => m.account_id === accountId)
     .sort((a, b) => a.recorded_on.localeCompare(b.recorded_on));
   const latest = rows.at(-1);
   if (!latest) return null;
@@ -318,15 +351,19 @@ const homeBlocks = {
   },
 
   figures() {
-    const tiles = Object.entries(PLATFORMS)
-      .map(([key, label]) => {
-        const f = figureFor(key);
+    const list = sortedAccounts();
+    if (!list.length) {
+      return panel("figures", "Mes chiffres", emptyState("Ajoute tes comptes YouTube, TikTok, Instagram et Twitch pour suivre leurs chiffres.", "go-accounts", "Ajouter mes comptes"));
+    }
+    const tiles = list
+      .map((a) => {
+        const f = figureFor(a.id);
         const sub = f
           ? [deltaText(f.d7, "7 jours"), deltaText(f.d28, "28 jours")].filter(Boolean).join(", ") ||
             `Relevé du ${fmt.day.format(fromKey(f.latest.recorded_on))}`
           : "Aucun relevé";
-        return `<div class="figure p-${key}">
-          <div class="figure-name"><i class="dot p-${key}"></i>${label}</div>
+        return `<div class="figure p-${esc(a.platform)}">
+          <div class="figure-name">${accountBadge(a)}<span class="figure-label">${esc(a.name)}</span></div>
           <div class="figure-value">${f ? fmt.num.format(f.latest.followers) : "–"}</div>
           <div class="figure-sub">${f ? "abonnés. " : ""}${sub}</div>
         </div>`;
@@ -367,8 +404,10 @@ const homeBlocks = {
       ? state.db.goals
           .map((g) => {
             const ratio = Math.max(0, Math.min(100, (Number(g.current_value) / Number(g.target_value)) * 100));
-            return `<button type="button" class="row-main goal ${g.platform ? `p-${esc(g.platform)}` : ""}" data-action="edit-goal" data-id="${esc(g.id)}">
-              <span class="goal-top"><span class="row-title">${esc(g.label)}</span>
+            const acc = accountOf(g.account_id);
+            const platform = acc?.platform || g.platform;
+            return `<button type="button" class="row-main goal ${platform ? `p-${esc(platform)}` : ""}" data-action="edit-goal" data-id="${esc(g.id)}">
+              <span class="goal-top"><span class="row-title">${acc ? accountBadge(acc) + " " : ""}${esc(g.label)}</span>
               <span class="muted small">${fmt.num.format(g.current_value)} / ${fmt.num.format(g.target_value)}</span></span>
               <span class="bar"><i style="width:${ratio.toFixed(1)}%"></i></span>
             </button>`;
@@ -413,7 +452,7 @@ function videoRow(v) {
     ${thumb ? `<img class="thumb" src="${esc(thumb)}" alt="" loading="lazy">` : ""}
     <button type="button" class="row-main" data-action="edit-video" data-id="${esc(v.id)}">
       <span class="row-title">${esc(v.title)}</span>
-      <span class="row-sub">${platformDots(v.platforms)}<span>${esc(when(v.planned_at))}</span>${steps(v.status)}</span>
+      <span class="row-sub">${videoBadges(v)}<span>${esc(when(v.planned_at))}</span>${steps(v.status)}</span>
     </button></li>`;
 }
 
@@ -446,9 +485,25 @@ function renderHome() {
 /* ---------- Vidéos ---------- */
 
 const filteredVideos = () =>
-  state.db.videos.filter((v) => !state.platform || (v.platforms || []).includes(state.platform));
+  state.db.videos.filter(
+    (v) =>
+      (!state.platform || (v.platforms || []).includes(state.platform)) &&
+      (!state.account || (v.account_ids || []).includes(state.account))
+  );
 
+// Filtre par compte quand des comptes existent, sinon par plateforme.
 function platformFilter() {
+  const list = sortedAccounts();
+  if (list.length) {
+    if (state.account && !accountOf(state.account)) state.account = null;
+    return `<button type="button" class="chip" data-action="filter-account" data-account="" aria-pressed="${!state.account}">Tous</button>
+      ${list
+        .map(
+          (a) => `<button type="button" class="chip" data-action="filter-account" data-account="${esc(a.id)}" aria-pressed="${state.account === a.id}"
+            title="${esc(a.name)}, ${esc(PLATFORMS[a.platform])}">${accountBadge(a)}<span class="chip-label">${esc(a.name)}</span></button>`
+        )
+        .join("")}`;
+  }
   return `<button type="button" class="chip" data-action="filter-platform" data-platform="" aria-pressed="${!state.platform}">Toutes</button>
     ${Object.entries(PLATFORMS)
       .map(
@@ -488,7 +543,7 @@ function renderVideos() {
           (v) => `<div role="button" tabindex="0" class="card ${firstPlatform(v)}" data-action="edit-video" data-id="${esc(v.id)}"
             draggable="true" data-drag="video-status">
             <span class="card-title">${esc(v.title)}</span>
-            <span class="card-meta">${platformDots(v.platforms)}<span>${esc(when(v.planned_at))}</span>
+            <span class="card-meta">${videoBadges(v)}<span>${esc(when(v.planned_at))}</span>
             ${v.kind === "stream" ? '<span class="tag stream">Stream</span>' : ""}
             ${v.sponsor ? `<span class="tag sponsor">${esc(v.sponsor)}</span>` : ""}</span>
           </div>`
@@ -508,14 +563,14 @@ function renderVideos() {
         <td class="title-cell"><button type="button" class="row-main">${esc(v.title)}</button>
           ${v.kind === "stream" ? '<span class="tag stream">Stream</span>' : ""}
           ${v.sponsor ? `<span class="tag sponsor">${esc(v.sponsor)}</span>` : ""}</td>
-        <td>${platformDots(v.platforms)} <span class="muted small">${esc((v.platforms || []).map((p) => PLATFORMS[p]).join(", "))}</span></td>
+        <td>${videoBadges(v)} <span class="muted small">${esc(videoChannels(v))}</span></td>
         <td>${steps(v.status)}</td>
         <td class="muted">${esc(when(v.planned_at))}</td>
       </tr>`;
     })
     .join("");
   const table = items.length
-    ? `<table class="table"><thead><tr><th></th><th>Titre</th><th>Plateformes</th><th>Avancement</th><th>Date prévue</th></tr></thead><tbody>${rows}</tbody></table>`
+    ? `<table class="table"><thead><tr><th></th><th>Titre</th><th>Comptes</th><th>Avancement</th><th>Date prévue</th></tr></thead><tbody>${rows}</tbody></table>`
     : emptyState("Aucune vidéo pour cette plateforme.");
   return `${toolbar}<div class="panel glass">${table}</div>`;
 }
@@ -574,7 +629,7 @@ function renderCalendar() {
     <aside class="cal-side">
       <p class="side-title">Afficher</p>
       ${box("video", "Vidéos", "#ededed")}${box("stream", "Streams", "var(--twitch)")}${box("task", "Tâches", "var(--sponsor)")}
-      <p class="side-title">Plateformes</p>
+      <p class="side-title">${state.db.accounts.length ? "Comptes" : "Plateformes"}</p>
       <div class="side-chips">${platformFilter()}</div>
     </aside>
     <div class="cal-main">
@@ -666,7 +721,7 @@ function thumbCard(v) {
   return `<button type="button" class="thumb-card" data-action="edit-video" data-id="${esc(v.id)}">
     ${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy">` : '<span class="thumb-empty">Sans miniature</span>'}
     <span class="thumb-title">${esc(v.title)}</span>
-    <span class="row-sub">${platformDots(v.platforms)}<span>${esc(STATUS_LABEL[v.status])}</span></span>
+    <span class="row-sub">${videoBadges(v)}<span>${esc(STATUS_LABEL[v.status])}</span></span>
   </button>`;
 }
 
@@ -1026,6 +1081,103 @@ function afterRender() {
   }
 }
 
+/* ---------- Comptes ---------- */
+
+function renderAccounts() {
+  const list = sortedAccounts();
+  const counts = new Map();
+  state.db.videos.forEach((v) => (v.account_ids || []).forEach((id) => counts.set(id, (counts.get(id) || 0) + 1)));
+  const intro = list.length
+    ? ""
+    : `<div class="panel glass" style="margin-bottom:12px">${emptyState(
+        "Ajoute chacun de tes comptes : tu pourras rattacher tes vidéos au bon compte, filtrer par compte et suivre leurs chiffres séparément."
+      )}</div>`;
+  const groups = Object.entries(PLATFORMS)
+    .map(([key, label]) => {
+      const items = list.filter((a) => a.platform === key);
+      return `<section class="panel glass">
+        <div class="panel-head"><h2><i class="dot p-${key}"></i> ${label}</h2>
+          <button type="button" class="btn small" data-action="new-account" data-platform="${key}">Ajouter un compte</button></div>
+        ${
+          items.length
+            ? `<ul class="rows">${items
+                .map((a) => {
+                  const n = counts.get(a.id) || 0;
+                  return `<li class="row">${accountBadge(a)}
+                  <button type="button" class="row-main" data-action="edit-account" data-id="${esc(a.id)}">
+                    <span class="row-title">${esc(a.name)}</span>
+                    <span class="row-sub">${a.handle ? `<span>${esc(a.handle)}</span>` : ""}<span>${n} contenu${n > 1 ? "s" : ""}</span></span>
+                  </button></li>`;
+                })
+                .join("")}</ul>`
+            : `<p class="muted small">Aucun compte ${esc(label)}.</p>`
+        }
+      </section>`;
+    })
+    .join("");
+  return `${intro}<div class="home accounts-grid">${groups}</div>`;
+}
+
+function accountForm(account, defaults = {}) {
+  const a = account || { platform: defaults.platform || "youtube" };
+  openForm({
+    title: account ? "Modifier le compte" : "Nouveau compte",
+    body: `
+      ${field(
+        "Plateforme",
+        `<select name="platform">${Object.entries(PLATFORMS)
+          .map(([key, label]) => `<option value="${key}" ${a.platform === key ? "selected" : ""}>${label}</option>`)
+          .join("")}</select>`
+      )}
+      ${field("Nom affiché", `<input type="text" name="name" value="${esc(a.name)}" maxlength="60" placeholder="Ma chaîne principale" required>`)}
+      ${field("Identifiant", `<input type="text" name="handle" value="${esc(a.handle)}" maxlength="80" placeholder="@moncompte">`)}
+      ${account ? '<p class="muted small">Supprimer le compte efface aussi ses relevés de chiffres. Les vidéos sont gardées.</p>' : ""}`,
+    async onSubmit(data) {
+      const platform = data.get("platform");
+      const row = { platform: platform in PLATFORMS ? platform : "youtube", name: text(data, "name"), handle: text(data, "handle") };
+      if (!row.name) return "Donne un nom au compte.";
+      if (!account) row.position = state.db.accounts.filter((x) => x.platform === row.platform).length;
+      const saved = await run(() => (account ? store.update("accounts", account.id, row) : store.insert("accounts", row)), "Compte enregistré");
+      if (!saved) return "L'enregistrement a échoué.";
+      if (!account) {
+        state.db.accounts.push(saved);
+        return;
+      }
+      Object.assign(account, saved);
+      // Les vidéos rattachées suivent la plateforme du compte.
+      for (const v of state.db.videos.filter((x) => (x.account_ids || []).includes(account.id))) {
+        const platforms = [...new Set(videoAccounts(v).map((x) => x.platform))];
+        if (platforms.join() !== (v.platforms || []).join()) {
+          const updated = await run(() => store.update("videos", v.id, { platforms }));
+          if (updated) Object.assign(v, updated);
+        }
+      }
+    },
+    onDelete: account
+      ? async () => {
+          const ok = await run(async () => {
+            for (const v of state.db.videos.filter((x) => (x.account_ids || []).includes(account.id))) {
+              const account_ids = v.account_ids.filter((id) => id !== account.id);
+              const platforms = account_ids.length
+                ? [...new Set(account_ids.map(accountOf).filter(Boolean).map((x) => x.platform))]
+                : v.platforms;
+              Object.assign(v, await store.update("videos", v.id, { account_ids, platforms }));
+            }
+            await store.remove("accounts", account.id);
+            return true;
+          }, "Compte supprimé");
+          if (!ok) return;
+          state.db.accounts = state.db.accounts.filter((x) => x.id !== account.id);
+          state.db.metrics = state.db.metrics.filter((m) => m.account_id !== account.id);
+          state.db.goals.forEach((g) => {
+            if (g.account_id === account.id) g.account_id = null;
+          });
+          if (state.account === account.id) state.account = null;
+        }
+      : null,
+  });
+}
+
 /* ---------- Fenêtres de saisie ---------- */
 
 const field = (label, control) => `<label class="field"><span>${label}</span>${control}</label>`;
@@ -1036,6 +1188,20 @@ function platformChoices(selected = []) {
       ([key, label]) => `<label class="choice p-${key}"><input type="checkbox" name="platforms" value="${key}" ${
         selected.includes(key) ? "checked" : ""
       }><span><i class="dot p-${key}"></i>${label}</span></label>`
+    )
+    .join("")}</fieldset>`;
+}
+
+function accountChoices(selectedIds = [], selectedPlatforms = []) {
+  const list = sortedAccounts();
+  if (!list.length) {
+    return `${platformChoices(selectedPlatforms)}<p class="muted small">Ajoute tes comptes dans le module Comptes pour choisir le compte exact.</p>`;
+  }
+  return `<fieldset class="choices"><legend>Comptes</legend>${list
+    .map(
+      (a) => `<label class="choice p-${esc(a.platform)}"><input type="checkbox" name="account_ids" value="${esc(a.id)}" ${
+        selectedIds.includes(a.id) ? "checked" : ""
+      }><span>${accountBadge(a)}${esc(a.name)}</span></label>`
     )
     .join("")}</fieldset>`;
 }
@@ -1104,7 +1270,7 @@ function videoForm(video, defaults = {}) {
         <label class="choice"><input type="radio" name="kind" value="video" ${v.kind !== "stream" ? "checked" : ""}><span>Vidéo</span></label>
         <label class="choice p-twitch"><input type="radio" name="kind" value="stream" ${v.kind === "stream" ? "checked" : ""}><span>Stream</span></label>
       </fieldset>
-      ${platformChoices(v.platforms)}
+      ${accountChoices(v.account_ids || [], v.platforms || [])}
       <div class="grid-2">
         ${field(
           "Avancement",
@@ -1128,7 +1294,6 @@ function videoForm(video, defaults = {}) {
       const row = {
         title: text(data, "title"),
         kind: data.get("kind") === "stream" ? "stream" : "video",
-        platforms: data.getAll("platforms").filter((p) => p in PLATFORMS),
         status: data.get("status") in STATUS_LABEL ? data.get("status") : "idee",
         planned_at: planned ? new Date(planned).toISOString() : null,
         sponsor: text(data, "sponsor"),
@@ -1137,6 +1302,12 @@ function videoForm(video, defaults = {}) {
         notes: text(data, "notes"),
       };
       if (!row.title) return "Donne un titre à la vidéo.";
+      if (state.db.accounts.length) {
+        row.account_ids = data.getAll("account_ids").filter((id) => accountOf(id));
+        row.platforms = [...new Set(row.account_ids.map((id) => accountOf(id).platform))];
+      } else {
+        row.platforms = data.getAll("platforms").filter((p) => p in PLATFORMS);
+      }
       if (video) {
         const saved = await run(() => store.update("videos", video.id, row), "Vidéo enregistrée");
         if (!saved) return "L'enregistrement a échoué.";
@@ -1268,12 +1439,21 @@ function goalForm(goal) {
     title: goal ? "Modifier l'objectif" : "Nouvel objectif",
     body: `
       ${field("Objectif", `<input type="text" name="label" value="${esc(g.label)}" maxlength="120" placeholder="1 000 followers Twitch" required>`)}
-      ${field(
-        "Plateforme",
-        `<select name="platform"><option value="">Aucune</option>${Object.entries(PLATFORMS)
-          .map(([key, label]) => `<option value="${key}" ${g.platform === key ? "selected" : ""}>${label}</option>`)
-          .join("")}</select>`
-      )}
+      ${
+        state.db.accounts.length
+          ? field(
+              "Compte",
+              `<select name="account_id"><option value="">Aucun</option>${sortedAccounts()
+                .map((a) => `<option value="${esc(a.id)}" ${g.account_id === a.id ? "selected" : ""}>${esc(a.name)}, ${esc(PLATFORMS[a.platform])}</option>`)
+                .join("")}</select>`
+            )
+          : field(
+              "Plateforme",
+              `<select name="platform"><option value="">Aucune</option>${Object.entries(PLATFORMS)
+                .map(([key, label]) => `<option value="${key}" ${g.platform === key ? "selected" : ""}>${label}</option>`)
+                .join("")}</select>`
+            )
+      }
       <div class="grid-2">
         ${field("Où tu en es", `<input type="number" name="current_value" value="${esc(g.current_value)}" min="0" step="any" required>`)}
         ${field("Cible", `<input type="number" name="target_value" value="${esc(g.target_value)}" min="1" step="any" required>`)}
@@ -1282,10 +1462,18 @@ function goalForm(goal) {
       const row = {
         label: text(data, "label"),
         platform: data.get("platform") in PLATFORMS ? data.get("platform") : null,
+        account_id: null,
         current_value: Number(data.get("current_value")),
         target_value: Number(data.get("target_value")),
       };
       if (!row.label) return "Décris ton objectif.";
+      const acc = accountOf(data.get("account_id"));
+      if (acc) {
+        row.account_id = acc.id;
+        row.platform = acc.platform;
+      } else if (state.db.accounts.length) {
+        row.platform = goal?.platform && !goal.account_id ? goal.platform : null;
+      }
       if (!(row.target_value > 0) || !(row.current_value >= 0)) return "La cible doit être supérieure à zéro.";
       if (goal) {
         const saved = await run(() => store.update("goals", goal.id, row), "Objectif enregistré");
@@ -1310,34 +1498,36 @@ function goalForm(goal) {
 }
 
 function metricsForm() {
-  const rows = Object.entries(PLATFORMS)
-    .map(([key, label]) => {
-      const latest = figureFor(key)?.latest;
-      return `<fieldset class="choices p-${key}" style="display:grid;gap:10px">
-        <legend><i class="dot p-${key}"></i> ${label}</legend>
+  const list = sortedAccounts();
+  if (!list.length) return go("accounts");
+  const rows = list
+    .map((a) => {
+      const latest = figureFor(a.id)?.latest;
+      return `<fieldset class="choices p-${esc(a.platform)}" style="display:grid;gap:10px">
+        <legend>${accountBadge(a)} ${esc(a.name)} <span class="muted small">${esc(PLATFORMS[a.platform])}</span></legend>
         <div class="grid-2">
-          ${field("Abonnés", `<input type="number" name="followers-${key}" min="0" step="1" inputmode="numeric" placeholder="${latest ? latest.followers : "0"}">`)}
-          ${field("Vues sur 28 jours", `<input type="number" name="views-${key}" min="0" step="1" inputmode="numeric" placeholder="${latest ? latest.views : "0"}">`)}
+          ${field("Abonnés", `<input type="number" name="followers-${esc(a.id)}" min="0" step="1" inputmode="numeric" placeholder="${latest ? latest.followers : "0"}">`)}
+          ${field("Vues sur 28 jours", `<input type="number" name="views-${esc(a.id)}" min="0" step="1" inputmode="numeric" placeholder="${latest ? latest.views : "0"}">`)}
         </div></fieldset>`;
     })
     .join("");
   openForm({
     title: "Mettre à jour mes chiffres",
-    body: `<p class="muted small">Relevé du jour. Laisse vide une plateforme que tu ne veux pas mettre à jour. La récupération automatique arrive avec le module Stats.</p>${rows}`,
+    body: `<p class="muted small">Relevé du jour. Laisse vide un compte que tu ne veux pas mettre à jour. La récupération automatique arrive pour YouTube et Twitch.</p>${rows}`,
     async onSubmit(data) {
       const today = todayKey();
       let saved = 0;
-      for (const key of Object.keys(PLATFORMS)) {
-        const followersRaw = String(data.get(`followers-${key}`) || "").trim();
-        const viewsRaw = String(data.get(`views-${key}`) || "").trim();
+      for (const a of list) {
+        const followersRaw = String(data.get(`followers-${a.id}`) || "").trim();
+        const viewsRaw = String(data.get(`views-${a.id}`) || "").trim();
         if (!followersRaw && !viewsRaw) continue;
-        const latest = figureFor(key)?.latest;
+        const latest = figureFor(a.id)?.latest;
         const followers = followersRaw ? Math.floor(Number(followersRaw)) : latest?.followers ?? 0;
         const views = viewsRaw ? Math.floor(Number(viewsRaw)) : latest?.views ?? 0;
         if (!(followers >= 0) || !(views >= 0)) return "Les chiffres doivent être des nombres positifs.";
-        const row = await run(() => store.saveMetric({ platform: key, recorded_on: today, followers, views }));
+        const row = await run(() => store.saveMetric({ account_id: a.id, platform: a.platform, recorded_on: today, followers, views }));
         if (!row) return "L'enregistrement a échoué.";
-        state.db.metrics = state.db.metrics.filter((m) => !(m.platform === key && m.recorded_on === today));
+        state.db.metrics = state.db.metrics.filter((m) => !(m.account_id === a.id && m.recorded_on === today));
         state.db.metrics.push(row);
         saved += 1;
       }
@@ -1380,6 +1570,16 @@ const actions = {
   "video-view": (el) => {
     state.videoView = el.dataset.view;
     render();
+  },
+  "filter-account": (el) => {
+    state.account = el.dataset.account || null;
+    render();
+  },
+  "go-accounts": () => go("accounts"),
+  "new-account": (el) => accountForm(null, { platform: el.dataset.platform }),
+  "edit-account": (el) => {
+    const a = find("accounts", el.dataset.id);
+    if (a) accountForm(a);
   },
   "filter-platform": (el) => {
     state.platform = el.dataset.platform || null;

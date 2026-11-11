@@ -1,7 +1,7 @@
 // Accès aux données : Supabase quand il est configuré, sinon stockage local (mode démo).
 import { SUPABASE_URL, SUPABASE_KEY } from "./config.js";
 
-export const TABLES = ["videos", "ideas", "tasks", "goals", "metrics", "notes", "time_entries", "review_comments"];
+export const TABLES = ["accounts", "videos", "ideas", "tasks", "goals", "metrics", "notes", "time_entries", "review_comments"];
 export const isCloud = Boolean(SUPABASE_URL && SUPABASE_KEY);
 
 let client = null;
@@ -119,6 +119,12 @@ export async function remove(table, id) {
   if (!isCloud) {
     const db = readLocal();
     db[table] = db[table].filter((r) => r.id !== id);
+    if (table === "accounts") {
+      db.metrics = db.metrics.filter((m) => m.account_id !== id);
+      db.goals.forEach((g) => {
+        if (g.account_id === id) g.account_id = null;
+      });
+    }
     if (table === "videos") {
       db.tasks.forEach((t) => {
         if (t.video_id === id) t.video_id = null;
@@ -140,7 +146,7 @@ export async function saveMetric(row) {
   if (!isCloud) {
     const db = readLocal();
     const existing = db.metrics.find(
-      (m) => m.platform === row.platform && m.recorded_on === row.recorded_on
+      (m) => m.account_id === row.account_id && m.recorded_on === row.recorded_on
     );
     if (existing) {
       Object.assign(existing, row, { updated_at: new Date().toISOString() });
@@ -152,7 +158,7 @@ export async function saveMetric(row) {
   }
   const { data, error } = await client
     .from("metrics")
-    .upsert(row, { onConflict: "user_id,platform,recorded_on" })
+    .upsert(row, { onConflict: "user_id,account_id,recorded_on" })
     .select()
     .single();
   fail(error);

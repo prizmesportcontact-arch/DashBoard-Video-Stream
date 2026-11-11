@@ -211,7 +211,7 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
 .pill.is-done { opacity: 0.55; text-decoration: line-through; }
 .pill time { color: var(--ink-2); margin-right: 5px; font-variant-numeric: tabular-nums; }
 
-.figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.figures { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .figure { padding: 12px; border-radius: var(--r-s); border: 1px solid var(--line); background: var(--black); }
 .figure-name { display: flex; align-items: center; gap: 7px; font-weight: 500; color: var(--ink-2); }
 .figure-value { font-family: var(--font-display); font-size: 1.5rem; font-weight: 600; line-height: 1.2; margin-top: 6px; font-variant-numeric: tabular-nums; }
@@ -397,6 +397,17 @@ button.timecode:hover { background: var(--hover); }
 .comment.is-resolved p { color: var(--ink-3); }
 .comment .source { font-size: 0.82rem; color: var(--ink-2); }
 
+/* Comptes */
+.acc { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--p, var(--ink-3)); color: #0a0a0a; font-size: 0.62rem; font-weight: 700; line-height: 1; }
+.accs { display: inline-flex; }
+.accs .acc + .acc { margin-left: -5px; box-shadow: 0 0 0 2px var(--panel); }
+.row > .acc { width: 30px; height: 30px; font-size: 0.78rem; }
+.chip .acc, .figure-name .acc, .choice .acc { width: 18px; height: 18px; font-size: 0.58rem; }
+.chip-label { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.figure-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.choices legend .acc { vertical-align: -4px; }
+.accounts-grid > .panel { grid-column: span 6; }
+
 /* Thème clair */
 :root[data-theme="light"] {
   color-scheme: light;
@@ -410,6 +421,7 @@ button.timecode:hover { background: var(--hover); }
 /* Écrans moyens */
 @media (max-width: 1100px) {
   .home > .panel { grid-column: 1 / -1; }
+  .accounts-grid > .panel { grid-column: 1 / -1; }
   .review { grid-template-columns: 1fr; }
   .review-side { max-height: none; }
 }
@@ -439,6 +451,7 @@ button.timecode:hover { background: var(--hover); }
   .day-name { width: 74px; flex: none; }
   .day .pill { width: auto; max-width: 100%; flex: 1 1 140px; }
   .figures { grid-template-columns: 1fr; }
+  .chip-label { display: none; }
   .figure { display: grid; grid-template-columns: 1fr auto; align-items: center; }
   .figure-value { margin: 0; font-size: 1.5rem; }
   .figure-sub { grid-column: 1 / -1; }

@@ -170,3 +170,32 @@ create policy "media_owner_update" on storage.objects for update to authenticate
   with check (bucket_id = 'media' and (storage.foldername(name))[1] = (select auth.uid())::text);
 create policy "media_owner_delete" on storage.objects for delete to authenticated
   using (bucket_id = 'media' and (storage.foldername(name))[1] = (select auth.uid())::text);
+
+-- Comptes multiples : plusieurs comptes par plateforme.
+create table if not exists public.accounts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  platform text not null check (platform in ('youtube', 'tiktok', 'instagram', 'twitch')),
+  name text not null,
+  handle text,
+  position smallint not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists accounts_user_idx on public.accounts (user_id, platform, position);
+alter table public.accounts enable row level security;
+revoke all on public.accounts from anon;
+grant select, insert, update, delete on public.accounts to authenticated;
+create policy "accounts_owner_select" on public.accounts for select to authenticated using ((select auth.uid()) = user_id);
+create policy "accounts_owner_insert" on public.accounts for insert to authenticated with check ((select auth.uid()) = user_id);
+create policy "accounts_owner_update" on public.accounts for update to authenticated using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
+create policy "accounts_owner_delete" on public.accounts for delete to authenticated using ((select auth.uid()) = user_id);
+create trigger accounts_touch before update on public.accounts for each row execute function public.touch_updated_at();
+
+alter table public.videos add column if not exists account_ids uuid[] not null default '{}';
+alter table public.metrics add column if not exists account_id uuid references public.accounts (id) on delete cascade;
+alter table public.metrics drop constraint if exists metrics_user_id_platform_recorded_on_key;
+create unique index if not exists metrics_account_day_key on public.metrics (user_id, account_id, recorded_on);
+create index if not exists metrics_account_idx on public.metrics (account_id);
+alter table public.goals add column if not exists account_id uuid references public.accounts (id) on delete set null;
+create index if not exists goals_account_idx on public.goals (account_id);
