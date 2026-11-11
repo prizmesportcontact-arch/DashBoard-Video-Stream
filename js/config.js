@@ -6,3 +6,7 @@ export const SUPABASE_URL = "https://rusgzubcppxsfualrgps.supabase.co";
 export const SUPABASE_KEY = "sb_publishable_JW7J6KvvjtoInb7IIvJ35A_ZPyIc5oC";
 
 export const APP_NAME = "Régie";
+
+// Connexion Twitch : identifiant public de l'application déclarée sur dev.twitch.tv (pas de secret).
+export const TWITCH_CLIENT_ID = "t7ijeiej96btnz157m4fnm945ex24z";
+export const TWITCH_REDIRECT = "https://prizmesportcontact-arch.github.io/DashBoard-Video-Stream/";

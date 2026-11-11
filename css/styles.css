@@ -408,6 +408,13 @@ button.timecode:hover { background: var(--hover); }
 .choices legend .acc { vertical-align: -4px; }
 .accounts-grid > .panel { grid-column: span 6; }
 
+/* Connexion des comptes */
+img.acc { object-fit: cover; background: var(--glass-2); }
+.tag.ok { background: rgba(62, 207, 110, 0.14); color: var(--done); }
+.live-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 0.8rem; font-weight: 600; color: var(--late); }
+.live-badge i { width: 8px; height: 8px; border-radius: 50%; background: var(--late); animation: live 1.6s ease-in-out infinite; }
+@keyframes live { 50% { opacity: 0.35; } }
+
 /* Thème clair */
 :root[data-theme="light"] {
   color-scheme: light;
@@ -478,5 +485,5 @@ button.timecode:hover { background: var(--hover); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; scroll-behavior: auto !important; }
+  * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }

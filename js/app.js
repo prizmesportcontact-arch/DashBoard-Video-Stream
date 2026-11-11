@@ -1,5 +1,6 @@
 import { APP_NAME } from "./config.js";
 import * as store from "./store.js";
+import * as twitch from "./twitch.js";
 
 /* ---------- Références ---------- */
 
@@ -39,6 +40,9 @@ const state = {
   videoView: "list",
   platform: null,
   account: null,
+  live: {},
+  reconnect: {},
+  syncing: false,
   calMode: window.matchMedia("(max-width: 820px)").matches ? "week" : "month",
   calCursor: new Date(),
   tag: null,
@@ -154,8 +158,13 @@ const initials = (name) =>
     .slice(0, 2)
     .map((w) => w[0].toUpperCase())
     .join("") || "?";
-const accountBadge = (a) =>
-  `<span class="acc p-${esc(a.platform)}" title="${esc(a.name)}, ${esc(PLATFORMS[a.platform])}">${esc(initials(a.name))}</span>`;
+const accountBadge = (a) => {
+  const avatar = safeUrl(a.avatar_url);
+  const title = `${esc(a.name)}, ${esc(PLATFORMS[a.platform])}`;
+  return avatar
+    ? `<img class="acc p-${esc(a.platform)}" src="${esc(avatar)}" alt="" title="${title}" loading="lazy">`
+    : `<span class="acc p-${esc(a.platform)}" title="${title}">${esc(initials(a.name))}</span>`;
+};
 const videoAccounts = (v) => (v.account_ids || []).map(accountOf).filter(Boolean);
 const videoBadges = (v) => {
   const list = videoAccounts(v);
@@ -366,6 +375,8 @@ const homeBlocks = {
           <div class="figure-name">${accountBadge(a)}<span class="figure-label">${esc(a.name)}</span></div>
           <div class="figure-value">${f ? fmt.num.format(f.latest.followers) : "–"}</div>
           <div class="figure-sub">${f ? "abonnés. " : ""}${sub}</div>
+          ${state.live[a.id] ? `<div class="live-badge"><i></i>En live, ${fmt.num.format(state.live[a.id].viewers)} viewers</div>` : ""}
+          ${state.reconnect[a.id] ? `<button type="button" class="btn small" data-action="twitch-connect">Reconnecter Twitch</button>` : ""}
         </div>`;
       })
       .join("");
@@ -1083,6 +1094,87 @@ function afterRender() {
 
 /* ---------- Comptes ---------- */
 
+function connectionTag(a) {
+  if (state.reconnect[a.id]) return '<span class="tag sponsor">À reconnecter</span>';
+  if (a.access_token) return `<span class="tag ok">Connecté${a.synced_at ? `, à jour à ${esc(fmt.time.format(new Date(a.synced_at)))}` : ""}</span>`;
+  return "";
+}
+
+// Récupère les chiffres des comptes connectés et les enregistre comme relevé du jour.
+async function syncConnected({ quiet = true } = {}) {
+  if (state.syncing) return;
+  const list = state.db.accounts.filter((a) => a.platform === "twitch" && a.access_token && a.external_id);
+  if (!list.length) return;
+  state.syncing = true;
+  let changed = false;
+  try {
+    for (const account of list) {
+      try {
+        const check = await twitch.validate(account.access_token);
+        const stats = await twitch.fetchStats(account.access_token, account.external_id);
+        state.live[account.id] = stats.live;
+        delete state.reconnect[account.id];
+        const latest = figureFor(account.id)?.latest;
+        const row = await store.saveMetric({
+          account_id: account.id,
+          platform: "twitch",
+          recorded_on: todayKey(),
+          followers: stats.followers,
+          views: latest?.views ?? 0,
+        });
+        state.db.metrics = state.db.metrics.filter((m) => !(m.account_id === account.id && m.recorded_on === row.recorded_on));
+        state.db.metrics.push(row);
+        Object.assign(account, await store.update("accounts", account.id, { synced_at: new Date().toISOString(), token_expires_at: check.expiresAt }));
+        changed = true;
+      } catch (err) {
+        if (err instanceof twitch.TwitchExpired) {
+          state.reconnect[account.id] = true;
+          changed = true;
+        } else {
+          console.warn("Actualisation Twitch impossible", err);
+          if (!quiet) toast(`Actualisation Twitch impossible : ${err.message}.`, true);
+        }
+      }
+    }
+  } finally {
+    state.syncing = false;
+  }
+  if (changed && !modal.open) render();
+}
+
+async function finishTwitchConnect(token) {
+  try {
+    const profile = await twitch.fetchProfile(token);
+    const check = await twitch.validate(token);
+    const twitchAccounts = state.db.accounts.filter((a) => a.platform === "twitch");
+    const unlinked = twitchAccounts.filter((a) => !a.external_id);
+    const existing =
+      twitchAccounts.find((a) => a.external_id === profile.id) ||
+      unlinked.find((a) => [a.name, a.handle].some((v) => String(v || "").replace(/^@/, "").toLowerCase() === profile.login)) ||
+      (unlinked.length === 1 ? unlinked[0] : null);
+    const row = {
+      platform: "twitch",
+      name: profile.name,
+      handle: `@${profile.login}`,
+      external_id: profile.id,
+      avatar_url: profile.avatar,
+      access_token: token,
+      token_expires_at: check.expiresAt,
+    };
+    if (existing) Object.assign(existing, await store.update("accounts", existing.id, row));
+    else state.db.accounts.push(await store.insert("accounts", { ...row, position: twitchAccounts.length }));
+    toast(`Twitch connecté : ${profile.name}`);
+    state.route = "accounts";
+    render();
+    await syncConnected({ quiet: false });
+  } catch (err) {
+    console.error(err);
+    toast(`Connexion Twitch impossible : ${err.message}.`, true);
+  }
+}
+
+
+
 function renderAccounts() {
   const list = sortedAccounts();
   const counts = new Map();
@@ -1097,7 +1189,8 @@ function renderAccounts() {
       const items = list.filter((a) => a.platform === key);
       return `<section class="panel glass">
         <div class="panel-head"><h2><i class="dot p-${key}"></i> ${label}</h2>
-          <button type="button" class="btn small" data-action="new-account" data-platform="${key}">Ajouter un compte</button></div>
+          ${key === "twitch" && twitch.enabled ? '<button type="button" class="btn small primary" data-action="twitch-connect">Se connecter avec Twitch</button>' : ""}
+          <button type="button" class="btn small" data-action="new-account" data-platform="${key}">Ajouter${key === "twitch" && twitch.enabled ? " à la main" : " un compte"}</button></div>
         ${
           items.length
             ? `<ul class="rows">${items
@@ -1106,7 +1199,7 @@ function renderAccounts() {
                   return `<li class="row">${accountBadge(a)}
                   <button type="button" class="row-main" data-action="edit-account" data-id="${esc(a.id)}">
                     <span class="row-title">${esc(a.name)}</span>
-                    <span class="row-sub">${a.handle ? `<span>${esc(a.handle)}</span>` : ""}<span>${n} contenu${n > 1 ? "s" : ""}</span></span>
+                    <span class="row-sub">${a.handle ? `<span>${esc(a.handle)}</span>` : ""}<span>${n} contenu${n > 1 ? "s" : ""}</span>${connectionTag(a)}</span>
                   </button></li>`;
                 })
                 .join("")}</ul>`
@@ -1131,6 +1224,7 @@ function accountForm(account, defaults = {}) {
       )}
       ${field("Nom affiché", `<input type="text" name="name" value="${esc(a.name)}" maxlength="60" placeholder="Ma chaîne principale" required>`)}
       ${field("Identifiant", `<input type="text" name="handle" value="${esc(a.handle)}" maxlength="80" placeholder="@moncompte">`)}
+      ${account?.access_token ? `<p class="small">Connecté à ${esc(PLATFORMS[account.platform])} : les abonnés se mettent à jour tout seuls. <button type="button" class="btn small" data-action="twitch-disconnect" data-id="${esc(account.id)}">Déconnecter</button></p>` : ""}
       ${account ? '<p class="muted small">Supprimer le compte efface aussi ses relevés de chiffres. Les vidéos sont gardées.</p>' : ""}`,
     async onSubmit(data) {
       const platform = data.get("platform");
@@ -1576,6 +1670,23 @@ const actions = {
     render();
   },
   "go-accounts": () => go("accounts"),
+  "twitch-connect": () => {
+    if (modal.open) modal.close();
+    twitch.startLogin();
+  },
+  "twitch-disconnect": async (el) => {
+    const account = find("accounts", el.dataset.id);
+    if (!account?.access_token) return;
+    const token = account.access_token;
+    const saved = await run(() => store.update("accounts", account.id, { access_token: null, token_expires_at: null }), "Twitch déconnecté");
+    if (!saved) return;
+    Object.assign(account, saved);
+    delete state.live[account.id];
+    delete state.reconnect[account.id];
+    twitch.revoke(token);
+    if (modal.open) modal.close();
+    render();
+  },
   "new-account": (el) => accountForm(null, { platform: el.dataset.platform }),
   "edit-account": (el) => {
     const a = find("accounts", el.dataset.id);
@@ -2015,6 +2126,9 @@ async function start() {
   const hash = location.hash.slice(1);
   if (ROUTES.some(([key]) => key === hash)) state.route = hash;
   render();
+  const pending = twitch.takePendingToken();
+  if (pending) await finishTwitchConnect(pending);
+  else syncConnected();
 }
 
 document.addEventListener("visibilitychange", async () => {
@@ -2023,6 +2137,7 @@ document.addEventListener("visibilitychange", async () => {
   try {
     await reload();
     render();
+    syncConnected();
   } catch (err) {
     console.warn("Actualisation impossible", err);
   }
@@ -2034,7 +2149,10 @@ try {
   /* thème par défaut */
 }
 
+const twitchReturn = twitch.enabled ? twitch.captureCallback() : null;
+
 (async () => {
+  if (twitchReturn?.error) setTimeout(() => toast(`Connexion Twitch annulée : ${twitchReturn.error}.`, true), 600);
   try {
     await store.init();
   } catch (err) {

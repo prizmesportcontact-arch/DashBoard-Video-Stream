@@ -199,3 +199,12 @@ create unique index if not exists metrics_account_day_key on public.metrics (use
 create index if not exists metrics_account_idx on public.metrics (account_id);
 alter table public.goals add column if not exists account_id uuid references public.accounts (id) on delete set null;
 create index if not exists goals_account_idx on public.goals (account_id);
+
+-- Connexion des comptes aux plateformes (Twitch pour commencer).
+alter table public.accounts
+  add column if not exists external_id text,
+  add column if not exists avatar_url text,
+  add column if not exists access_token text,
+  add column if not exists token_expires_at timestamptz,
+  add column if not exists synced_at timestamptz;
+create unique index if not exists accounts_external_key on public.accounts (user_id, platform, external_id) where external_id is not null;
