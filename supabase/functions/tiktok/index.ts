@@ -49,19 +49,13 @@ async function profile(accessToken: string) {
   };
 }
 
-// Envoie une vidéo (rangée dans le stockage Supabase de l'utilisateur) dans la boîte de réception TikTok,
-// en brouillon : l'utilisateur termine la publication dans l'appli TikTok.
-async function sendDraft(req: Request, accessToken: string, path: string) {
-  const file = await fetch(`${Deno.env.get("SUPABASE_URL")}/storage/v1/object/media/${path.split("/").map(encodeURIComponent).join("/")}`, {
-    headers: { Authorization: req.headers.get("authorization") ?? "", apikey: req.headers.get("apikey") ?? "" },
-  });
-  if (!file.ok) throw new Error("vidéo introuvable dans le stockage de Régie");
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const size = bytes.byteLength;
+// Prépare l'envoi d'une vidéo dans la boîte de réception TikTok (brouillon) : TikTok renvoie l'adresse
+// où déposer les morceaux, que la fonction « relay » transmet ensuite un par un.
+async function initDraft(accessToken: string, size: number, chunkSize: number, count: number) {
   const init = await fetch("https://open.tiktokapis.com/v2/post/publish/inbox/video/init/", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json; charset=UTF-8" },
-    body: JSON.stringify({ source_info: { source: "FILE_UPLOAD", video_size: size, chunk_size: size, total_chunk_count: 1 } }),
+    body: JSON.stringify({ source_info: { source: "FILE_UPLOAD", video_size: size, chunk_size: chunkSize, total_chunk_count: count } }),
   });
   const started = await init.json().catch(() => ({}));
   if (!init.ok || (started.error && started.error.code !== "ok")) {
@@ -71,13 +65,7 @@ async function sendDraft(req: Request, accessToken: string, path: string) {
       : started.error?.message || `TikTok ${init.status}`;
     throw new Error(message);
   }
-  const put = await fetch(started.data.upload_url, {
-    method: "PUT",
-    headers: { "Content-Type": file.headers.get("content-type") || "video/mp4", "Content-Range": `bytes 0-${size - 1}/${size}` },
-    body: bytes,
-  });
-  if (!put.ok) throw new Error(`envoi de la vidéo refusé par TikTok (${put.status})`);
-  return started.data.publish_id as string;
+  return { upload_url: started.data.upload_url as string, publish_id: started.data.publish_id as string };
 }
 
 // Vérifie que l'appel vient d'un utilisateur connecté à Régie.
@@ -103,15 +91,17 @@ Deno.serve(async (req) => {
       t = await token({ code: body.code, grant_type: "authorization_code", redirect_uri: REDIRECT });
     } else if (body.action === "sync" && typeof body.refresh_token === "string") {
       t = await token({ refresh_token: body.refresh_token, grant_type: "refresh_token" });
-    } else if (body.action === "draft" && typeof body.refresh_token === "string" && typeof body.path === "string") {
+    } else if (body.action === "draft_init" && typeof body.refresh_token === "string") {
+      const size = Number(body.size), chunk = Number(body.chunk_size), count = Number(body.count);
+      if (!(size > 0 && chunk > 0 && count > 0)) throw new Error("taille de vidéo invalide");
       t = await token({ refresh_token: body.refresh_token, grant_type: "refresh_token" });
-      const publishId = await sendDraft(req, t.access_token, body.path);
+      const draft = await initDraft(t.access_token, size, chunk, count);
       return new Response(
         JSON.stringify({
           access_token: t.access_token,
           refresh_token: t.refresh_token,
           refresh_expires_at: new Date(Date.now() + (t.refresh_expires_in ?? 31536000) * 1000).toISOString(),
-          publish_id: publishId,
+          ...draft,
         }),
         { headers }
       );

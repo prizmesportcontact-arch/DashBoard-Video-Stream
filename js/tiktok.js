@@ -66,5 +66,6 @@ async function call(body) {
 
 export const exchange = (code) => call({ action: "exchange", code });
 export const sync = (refreshToken) => call({ action: "sync", refresh_token: refreshToken });
-// Envoie une vidéo du stockage de Régie dans la boîte TikTok du compte, en brouillon.
-export const sendDraft = (refreshToken, path) => call({ action: "draft", refresh_token: refreshToken, path });
+// Prépare un brouillon TikTok : renvoie l'adresse où la fonction « relay » dépose les morceaux.
+export const initDraft = (refreshToken, size, chunkSize, count) =>
+  call({ action: "draft_init", refresh_token: refreshToken, size, chunk_size: chunkSize, count });

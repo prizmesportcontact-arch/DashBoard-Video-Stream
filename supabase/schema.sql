@@ -235,3 +235,6 @@ create policy "publications_update" on public.publications for update to authent
 create policy "publications_delete" on public.publications for delete to authenticated using (user_id = (select auth.uid()));
 create index if not exists publications_user_idx on public.publications (user_id, created_at desc);
 create trigger publications_touch before update on public.publications for each row execute function public.touch_updated_at();
+
+alter table public.publications add column if not exists media_parts jsonb not null default '[]'::jsonb;
+alter table public.publications add column if not exists media_size bigint;

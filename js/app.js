@@ -70,6 +70,7 @@ const state = {
   pubVideo: null,
   pubRunning: false,
   pubSteps: {},
+  pubUpload: null,
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -1374,7 +1375,7 @@ function bindCharts() {
 
 /* ---------- Publication ---------- */
 
-const MAX_UPLOAD = 50 * 1024 * 1024;
+const MAX_UPLOAD = 500 * 1024 * 1024;
 const TARGET_LABEL = {
   pending: "En attente",
   running: "En cours",
@@ -1413,7 +1414,7 @@ function renderPublish() {
       <label class="dropzone">
         <input type="file" name="file" accept="video/mp4,video/quicktime,video/webm" data-action="publish-file">
         <span class="dropzone-text"><strong>${state.pubFile ? esc(state.pubFile.name) : "Choisir la vidéo"}</strong>
-          <span class="muted small">${state.pubFile ? sizeText(state.pubFile.size) : "MP4 ou MOV, format vertical conseillé, 50 Mo maximum"}</span></span>
+          <span class="muted small">${state.pubFile ? sizeText(state.pubFile.size) : "MP4 ou MOV, format vertical conseillé, 500 Mo maximum"}</span></span>
       </label>
       ${state.pubPreview ? `<video class="pub-preview" src="${esc(state.pubPreview)}" controls playsinline muted></video>` : ""}
       ${videos.length ? field("Vidéo de Régie (facultatif)", `<select name="video_id" data-action="publish-link"><option value="">Aucune</option>${videos.map((v) => `<option value="${esc(v.id)}" ${state.pubVideo === v.id ? "selected" : ""}>${esc(v.title)}</option>`).join("")}</select>`) : ""}
@@ -1429,7 +1430,7 @@ function renderPublish() {
         <li><strong>TikTok</strong> : la vidéo arrive dans tes notifications TikTok. Ouvre-la, colle la légende (Régie la copie pour toi) et publie. TikTok n'autorise pas encore Régie à publier directement.</li>
       </ul>
       <p class="form-error" role="alert" hidden></p>
-      <div class="modal-actions"><span class="spacer"></span><button type="submit" class="btn primary" ${state.pubRunning ? "disabled" : ""}>${state.pubRunning ? "Publication en cours…" : "Publier"}</button></div>
+      <div class="modal-actions"><span class="spacer"></span><button type="submit" class="btn primary" ${state.pubRunning ? "disabled" : ""}>${state.pubRunning ? esc(state.pubUpload || "Publication en cours…") : "Publier"}</button></div>
     </form>`
     : `<section class="panel glass">${emptyState("Connecte d'abord un compte Instagram ou TikTok dans Comptes pour publier depuis Régie.", "go-accounts", "Ouvrir Comptes")}</section>`;
   const list = history.length
@@ -1443,7 +1444,7 @@ function renderPublish() {
             <ul class="pub-targets">${p.targets.map(targetLine).join("")}</ul>
             <div class="pub-actions">
               ${hasDraft && p.caption ? `<button type="button" class="btn small" data-action="publish-copy" data-id="${esc(p.id)}">Copier la légende</button>` : ""}
-              ${p.targets.some((t) => t.status === "error") && p.media_path ? `<button type="button" class="btn small" data-action="publish-retry" data-id="${esc(p.id)}" ${state.pubRunning ? "disabled" : ""}>Réessayer</button>` : ""}
+              ${p.targets.some((t) => t.status === "error") && p.media_parts?.length ? `<button type="button" class="btn small" data-action="publish-retry" data-id="${esc(p.id)}" ${state.pubRunning ? "disabled" : ""}>Réessayer</button>` : ""}
               <button type="button" class="btn small ghost" data-action="publish-delete" data-id="${esc(p.id)}">Retirer de l'historique</button>
             </div>
           </li>`;
@@ -1463,7 +1464,7 @@ function keepPublishDraft() {
 }
 
 async function savePublication(pub) {
-  const saved = await store.update("publications", pub.id, { targets: pub.targets, media_path: pub.media_path });
+  const saved = await store.update("publications", pub.id, { targets: pub.targets, media_path: pub.media_path, media_parts: pub.media_parts });
   Object.assign(pub, saved);
 }
 
@@ -1482,14 +1483,31 @@ async function runTargets(pub) {
     step("Envoi");
     try {
       if (!account || !canPublish(account)) throw new Error("ce compte n'est plus connecté");
+      const parts = pub.media_parts || [];
+      if (!parts.length) throw new Error("la vidéo n'est plus disponible : refais une publication");
+      const relay = async (kind, url, extra = {}) => {
+        for (const [i, part] of parts.entries()) {
+          if (parts.length > 1) step(`Envoi ${i + 1}/${parts.length}`);
+          const { error } = await store.callFunction("relay", { kind, url, path: part.path, start: part.start, size: pub.media_size, type: part.type, ...extra });
+          if (error) throw new Error(error);
+        }
+      };
       if (account.platform === "instagram") {
-        videoUrl ||= await store.mediaUrl(pub.media_path);
-        const id = await instagram.publishReel({ token: account.access_token, id: account.external_id, videoUrl, caption: pub.caption, onStep: step });
+        const options = { token: account.access_token, id: account.external_id, caption: pub.caption, onStep: step };
+        if (parts.length === 1) {
+          videoUrl ||= await store.mediaUrl(parts[0].path);
+          options.videoUrl = videoUrl;
+        } else {
+          options.upload = (uri) => relay("instagram", uri, { token: account.access_token });
+        }
+        const id = await instagram.publishReel(options);
         pub.targets[index] = { ...pub.targets[index], status: "published", remote_id: id, done_at: new Date().toISOString() };
       } else {
         step("Envoi vers TikTok");
-        const res = await tiktok.sendDraft(account.refresh_token, pub.media_path);
+        const chunk = parts.length === 1 ? pub.media_size : store.PART_SIZE;
+        const res = await tiktok.initDraft(account.refresh_token, pub.media_size, chunk, parts.length);
         Object.assign(account, await store.update("accounts", account.id, { access_token: res.access_token, refresh_token: res.refresh_token, token_expires_at: res.refresh_expires_at }));
+        await relay("tiktok", res.upload_url);
         pub.targets[index] = { ...pub.targets[index], status: "draft_sent", remote_id: res.publish_id, done_at: new Date().toISOString() };
       }
     } catch (err) {
@@ -1506,9 +1524,10 @@ async function runTargets(pub) {
   });
   await Promise.all(jobs);
   // La vidéo n'est plus utile une fois envoyée partout : on libère la place.
-  if (pub.targets.every((t) => t.status === "published" || t.status === "draft_sent") && pub.media_path) {
-    await store.removeMedia(pub.media_path).catch((e) => console.warn(e));
+  if (pub.targets.every((t) => t.status === "published" || t.status === "draft_sent") && pub.media_parts?.length) {
+    await store.removeMediaMany(pub.media_parts.map((p) => p.path)).catch((e) => console.warn(e));
     pub.media_path = null;
+    pub.media_parts = [];
     await savePublication(pub).catch((e) => console.warn(e));
   }
   state.pubRunning = false;
@@ -1528,7 +1547,7 @@ async function submitPublish(form) {
   const file = state.pubFile;
   const ids = data.getAll("targets");
   if (!file) return fail("Choisis la vidéo à publier.");
-  if (file.size > MAX_UPLOAD) return fail(`Cette vidéo fait ${sizeText(file.size)} : la limite est de 50 Mo. Exporte-la un peu plus légère.`);
+  if (file.size > MAX_UPLOAD) return fail(`Cette vidéo fait ${sizeText(file.size)} : la limite est de 500 Mo. Exporte-la un peu plus légère.`);
   if (!ids.length) return fail("Coche au moins un compte.");
   const caption = String(data.get("caption") || "").trim();
   state.pubCaption = caption;
@@ -1536,12 +1555,19 @@ async function submitPublish(form) {
   render();
   let pub;
   try {
-    toast("Envoi de la vidéo…");
-    const path = await store.uploadMedia(file);
+    state.pubUpload = "Envoi de la vidéo vers Régie";
+    render();
+    const media = await store.uploadParts(file, (i, n) => {
+      state.pubUpload = n > 1 ? `Envoi de la vidéo vers Régie (${i + 1}/${n})` : "Envoi de la vidéo vers Régie";
+      if (state.route === "publish") render();
+    });
+    state.pubUpload = null;
     pub = await store.insert("publications", {
       video_id: text(data, "video_id"),
       caption,
-      media_path: path,
+      media_path: media.folder,
+      media_parts: media.parts.map((p) => ({ ...p, type: media.type })),
+      media_size: media.size,
       file_name: file.name,
       targets: ids.map((id) => ({ account_id: id, platform: accountOf(id)?.platform, status: "pending" })),
     });
@@ -1549,6 +1575,7 @@ async function submitPublish(form) {
   } catch (err) {
     console.error(err);
     state.pubRunning = false;
+    state.pubUpload = null;
     toast(`Envoi impossible : ${err.message}.`, true);
     render();
     return;
@@ -2329,7 +2356,7 @@ const actions = {
     const pub = find("publications", el.dataset.id);
     if (!pub || state.pubRunning) return;
     const ok = await run(async () => {
-      if (pub.media_path) await store.removeMedia(pub.media_path).catch(() => {});
+      if (pub.media_parts?.length) await store.removeMediaMany(pub.media_parts.map((p) => p.path)).catch(() => {});
       await store.remove("publications", pub.id);
       return true;
     }, "Retiré de l'historique");

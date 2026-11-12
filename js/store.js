@@ -175,16 +175,44 @@ export async function mediaUrl(path) {
   return data.signedUrl;
 }
 
-// Envoie un fichier vidéo dans le stockage de l'utilisateur (dossier à son identifiant).
-export async function uploadMedia(file, folder = "publish") {
+// Envoie une vidéo dans le stockage de l'utilisateur, découpée en morceaux de 50 Mo au plus
+// (limite par fichier de l'offre gratuite). Les morceaux suivent les règles d'envoi de TikTok :
+// une seule pièce jusqu'à 50 Mo, sinon des pièces de 25 Mo dont la dernière garde le reste.
+export const PART_SIZE = 25 * 1024 * 1024;
+export const SINGLE_MAX = 50 * 1024 * 1024;
+
+export function splitParts(size) {
+  if (size <= SINGLE_MAX) return [{ start: 0, size }];
+  const count = Math.floor(size / PART_SIZE);
+  return Array.from({ length: count }, (_, i) => ({
+    start: i * PART_SIZE,
+    size: i === count - 1 ? size - i * PART_SIZE : PART_SIZE,
+  }));
+}
+
+export async function uploadParts(file, onProgress = () => {}) {
   if (!isCloud) throw new Error("la publication fonctionne seulement avec le compte en ligne");
   const { data: session } = await client.auth.getSession();
   const uid = session.session?.user?.id;
   const ext = (file.name.match(/\.(mp4|mov|webm|m4v)$/i)?.[1] || "mp4").toLowerCase();
-  const path = `${uid}/${folder}/${crypto.randomUUID()}.${ext}`;
-  const { error } = await client.storage.from(BUCKET).upload(path, file, { contentType: file.type || "video/mp4", upsert: false });
+  const folder = `${uid}/publish/${crypto.randomUUID()}`;
+  const type = file.type || "video/mp4";
+  const parts = splitParts(file.size);
+  for (const [i, part] of parts.entries()) {
+    onProgress(i, parts.length);
+    const path = `${folder}/part-${String(i).padStart(3, "0")}.${ext}`;
+    const blob = file.slice(part.start, part.start + part.size, type);
+    const { error } = await client.storage.from(BUCKET).upload(path, blob, { contentType: type, upsert: false });
+    fail(error);
+    part.path = path;
+  }
+  return { folder, parts, size: file.size, type };
+}
+
+export async function removeMediaMany(paths) {
+  if (!isCloud || !paths.length) return;
+  const { error } = await client.storage.from(BUCKET).remove(paths);
   fail(error);
-  return path;
 }
 
 export async function removeMedia(path) {

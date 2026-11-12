@@ -93,11 +93,21 @@ async function post(path, params, token) {
   return data;
 }
 
-export async function publishReel({ token, id, videoUrl, caption, onStep = () => {} }) {
+// Deux façons d'envoyer la vidéo à Instagram :
+// - videoUrl : Instagram la télécharge depuis un lien temporaire (vidéos jusqu'à 50 Mo) ;
+// - upload(uri) : envoi en plusieurs morceaux vers l'adresse fournie par Instagram (vidéos plus lourdes).
+export async function publishReel({ token, id, videoUrl, upload, caption, onStep = () => {} }) {
   if (isUnified(token) && !id) throw new MissingId();
   const owner = isUnified(token) ? id : "me";
-  onStep("Instagram récupère la vidéo");
-  const container = await post(`/${owner}/media`, { media_type: "REELS", video_url: videoUrl, caption: caption || "", share_to_feed: "true" }, token);
+  const params = { media_type: "REELS", caption: caption || "", share_to_feed: "true" };
+  if (upload) params.upload_type = "resumable";
+  else params.video_url = videoUrl;
+  onStep(upload ? "Envoi vers Instagram" : "Instagram récupère la vidéo");
+  const container = await post(`/${owner}/media`, params, token);
+  if (upload) {
+    if (!container.uri) throw new Error("Instagram n'a pas fourni d'adresse d'envoi");
+    await upload(container.uri);
+  }
   const base = isUnified(token) ? FB_API : API;
   const started = Date.now();
   for (;;) {
@@ -106,7 +116,7 @@ export async function publishReel({ token, id, videoUrl, caption, onStep = () =>
     const data = await res.json().catch(() => ({}));
     if (data.status_code === "FINISHED") break;
     if (data.status_code === "ERROR" || data.status_code === "EXPIRED") throw new Error(`Instagram n'a pas pu préparer la vidéo (${data.status || data.status_code})`);
-    if (Date.now() - started > 8 * 60 * 1000) throw new Error("Instagram met trop de temps à préparer la vidéo, réessaie plus tard");
+    if (Date.now() - started > 10 * 60 * 1000) throw new Error("Instagram met trop de temps à préparer la vidéo, réessaie plus tard");
     onStep("Instagram prépare la vidéo");
   }
   onStep("Publication");
